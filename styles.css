@@ -263,7 +263,7 @@ body::after {
 canvas {
   width: 100%;
   height: auto;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: 16 / 10;
   display: block;
   border-radius: 22px;
   background: linear-gradient(180deg, rgba(5, 10, 22, 0.9), rgba(6, 10, 24, 0.96));
