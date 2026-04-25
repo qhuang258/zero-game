@@ -11,6 +11,10 @@ const choiceTag = document.getElementById("choiceTag");
 const choiceTitle = document.getElementById("choiceTitle");
 const choiceText = document.getElementById("choiceText");
 const choiceOptions = document.getElementById("choiceOptions");
+const splashStage = document.getElementById("splashStage");
+const splashImage = document.getElementById("splashImage");
+const splashTag = document.getElementById("splashTag");
+const splashTitle = document.getElementById("splashTitle");
 
 const hpFill = document.getElementById("hpFill");
 const hpText = document.getElementById("hpText");
@@ -31,12 +35,19 @@ const view = { width: canvas.width, height: canvas.height };
 const world = { width: 2800, height: 1800 };
 const keys = new Set();
 const CITY = createCityMap();
+const mouse = { x: view.width * 0.5, y: view.height * 0.5, down: false, inside: false };
+const stylizedSpriteCache = new Map();
+let splashTimer = 0;
 
 function loadSprite(src) {
   const image = new Image();
   image.decoding = "async";
   image.src = src;
   return image;
+}
+
+function getSpriteSource(sprite) {
+  return sprite?.currentSrc || sprite?.src || "";
 }
 
 const SPRITES = {
@@ -78,6 +89,10 @@ const CONFIG = {
   bossFirstTime: 60,
   bossEvery: 70,
   extractionTime: 185,
+  baseShootCooldown: 0.16,
+  baseShootDamage: 18,
+  baseShootSpeed: 1080,
+  baseShootRange: 720,
 };
 
 const STORY_EVENTS = [
@@ -546,6 +561,7 @@ const state = {
   effects: [],
   floatingTexts: [],
   enemyProjectiles: [],
+  playerProjectiles: [],
   messageText: "",
   nextBossTime: CONFIG.bossFirstTime,
   bossStage: 0,
@@ -577,6 +593,11 @@ const player = {
   xpToNext: 30,
   nova: 0,
   moveSpeed: CONFIG.baseMoveSpeed,
+  shootCooldownBase: CONFIG.baseShootCooldown,
+  shootCooldownTimer: 0,
+  shootDamage: CONFIG.baseShootDamage,
+  shootSpeed: CONFIG.baseShootSpeed,
+  shootRange: CONFIG.baseShootRange,
   slashCooldownBase: CONFIG.baseSlashCooldown,
   slashCooldownTimer: 0,
   slashRange: CONFIG.baseSlashRange,
@@ -851,9 +872,66 @@ function worldToScreen(x, y, camera) {
   return { x: x - camera.x, y: y - camera.y };
 }
 
+function getCamera(shakeX = 0, shakeY = 0) {
+  return {
+    x: clamp(player.x - view.width / 2 + shakeX, 0, world.width - view.width),
+    y: clamp(player.y - view.height / 2 + shakeY, 0, world.height - view.height),
+  };
+}
+
+function screenToWorld(x, y, camera) {
+  return { x: camera.x + x, y: camera.y + y };
+}
+
+function updateMousePosition(event) {
+  const rect = canvas.getBoundingClientRect();
+  mouse.x = clamp(((event.clientX - rect.left) / rect.width) * view.width, 0, view.width);
+  mouse.y = clamp(((event.clientY - rect.top) / rect.height) * view.height, 0, view.height);
+  mouse.inside = event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
+}
+
+function hideSplash() {
+  splashTimer = 0;
+  splashStage.classList.add("hidden");
+  splashStage.setAttribute("aria-hidden", "true");
+}
+
+function showSplash(path = null, title = "Zero Enters The Hunt", tag = "ZERO AWAKENING", duration = 2.4) {
+  const sprite = path === "fang"
+    ? SPRITES.heroFang
+    : path === "ghost"
+      ? SPRITES.heroGhost
+      : path === "domain"
+        ? SPRITES.heroDomain
+        : SPRITES.hero;
+  splashImage.src = getSpriteSource(sprite);
+  splashTag.textContent = tag;
+  splashTitle.textContent = title;
+  splashTimer = duration;
+  splashStage.classList.remove("hidden");
+  splashStage.setAttribute("aria-hidden", "false");
+}
+
 function setBurst(text, duration = 1.2) {
   state.messageText = text;
   state.messageTimer = duration;
+}
+
+function getMeleeThreatScale(type) {
+  const ramp = clamp((state.time - 55) / 125, 0, 1);
+  if (type === "runner") {
+    return 1 + ramp * 0.16;
+  }
+  if (type === "elite") {
+    return 1 + ramp * 0.28;
+  }
+  if (type === "charger") {
+    return 1 + ramp * 0.22;
+  }
+  if (type === "boss") {
+    return 1 + Math.min(0.26, state.bossStage * 0.05 + ramp * 0.12);
+  }
+  return 1;
 }
 
 function setStory(text) {
@@ -940,14 +1018,15 @@ function activateOverdrive() {
 
 function createEnemy(type, x, y, scale = 1) {
   if (type === "runner") {
+    const bodyScale = getMeleeThreatScale(type);
     return {
       x,
       y,
       type,
-      radius: 18,
+      radius: 18 * bodyScale,
       speed: (CONFIG.baseEnemySpeed + Math.random() * 70) * scale,
-      hp: 36 * scale,
-      maxHp: 36 * scale,
+      hp: 36 * scale * (1 + (bodyScale - 1) * 0.9),
+      maxHp: 36 * scale * (1 + (bodyScale - 1) * 0.9),
       damage: 12,
       touchCooldown: 0,
       fireCooldown: 0,
@@ -958,14 +1037,15 @@ function createEnemy(type, x, y, scale = 1) {
   }
 
   if (type === "elite") {
+    const bodyScale = getMeleeThreatScale(type);
     return {
       x,
       y,
       type,
-      radius: 30,
+      radius: 30 * bodyScale,
       speed: 118 * scale,
-      hp: 140 * scale,
-      maxHp: 140 * scale,
+      hp: 140 * scale * (1 + (bodyScale - 1) * 0.85),
+      maxHp: 140 * scale * (1 + (bodyScale - 1) * 0.85),
       damage: 22,
       touchCooldown: 0,
       fireCooldown: 0,
@@ -994,14 +1074,15 @@ function createEnemy(type, x, y, scale = 1) {
   }
 
   if (type === "charger") {
+    const bodyScale = getMeleeThreatScale(type);
     return {
       x,
       y,
       type,
-      radius: 20,
+      radius: 20 * bodyScale,
       speed: 118 * scale,
-      hp: 58 * scale,
-      maxHp: 58 * scale,
+      hp: 58 * scale * (1 + (bodyScale - 1) * 0.88),
+      maxHp: 58 * scale * (1 + (bodyScale - 1) * 0.88),
       damage: 18,
       touchCooldown: 0,
       fireCooldown: 0,
@@ -1111,14 +1192,15 @@ function createEnemy(type, x, y, scale = 1) {
     };
   }
 
+  const bossScale = getMeleeThreatScale("boss");
   return {
     x,
     y,
     type: "boss",
-    radius: 48,
+    radius: 48 * bossScale,
     speed: 120 + state.bossStage * 10,
-    hp: 850 + state.bossStage * 260,
-    maxHp: 850 + state.bossStage * 260,
+    hp: (850 + state.bossStage * 260) * (1 + (bossScale - 1) * 0.72),
+    maxHp: (850 + state.bossStage * 260) * (1 + (bossScale - 1) * 0.72),
     damage: 30,
     touchCooldown: 0,
     fireCooldown: 0,
@@ -1527,6 +1609,7 @@ function registerMajorTalent(node) {
   player.buildHistory.unshift(`${BUILD_LABELS[node.path]} Talent · ${node.title}`);
   player.buildHistory = player.buildHistory.slice(0, 5);
   syncBuildProfile();
+  showSplash(node.path, `${BUILD_LABELS[node.path]} Route Online`, "MAJOR TALENT", 2.35);
 }
 
 function getOutgoingDamageMultiplier(enemy, source) {
@@ -1534,7 +1617,10 @@ function getOutgoingDamageMultiplier(enemy, source) {
 
   if (player.buildCore === "fang") {
     if (source === "slash") {
-      multiplier *= 1.18;
+      multiplier *= 1.14;
+    }
+    if (source === "shot") {
+      multiplier *= 1.08;
     }
     if (enemy.type === "elite" || enemy.type === "turret") {
       multiplier *= 1.12;
@@ -1546,6 +1632,9 @@ function getOutgoingDamageMultiplier(enemy, source) {
     if (source === "dash" || source === "afterimage") {
       multiplier *= 1.25;
     }
+    if (source === "shot") {
+      multiplier *= 1.14;
+    }
     if (enemy.type === "shooter" || enemy.type === "jammer") {
       multiplier *= 1.15;
     }
@@ -1555,6 +1644,9 @@ function getOutgoingDamageMultiplier(enemy, source) {
   } else if (player.buildCore === "domain") {
     if (source === "nova" || source === "aura") {
       multiplier *= 1.22;
+    }
+    if (source === "shot") {
+      multiplier *= 0.98;
     }
     if (enemy.type === "boss" || enemy.type === "jammer") {
       multiplier *= 1.15;
@@ -1743,7 +1835,7 @@ function renderChoiceModal(choice) {
 }
 
 function tryOpenNextChoice() {
-  if (state.mode !== "playing" || pendingChoices.length === 0) {
+  if (state.mode !== "playing" || pendingChoices.length === 0 || splashTimer > 0) {
     return;
   }
 
@@ -1852,6 +1944,11 @@ function resetPlayer() {
   player.xpToNext = 30;
   player.nova = 40;
   player.moveSpeed = CONFIG.baseMoveSpeed;
+  player.shootCooldownBase = CONFIG.baseShootCooldown;
+  player.shootCooldownTimer = 0;
+  player.shootDamage = CONFIG.baseShootDamage;
+  player.shootSpeed = CONFIG.baseShootSpeed;
+  player.shootRange = CONFIG.baseShootRange;
   player.slashCooldownBase = CONFIG.baseSlashCooldown;
   player.slashCooldownTimer = 0;
   player.slashRange = CONFIG.baseSlashRange;
@@ -1932,6 +2029,7 @@ function resetGame() {
   state.effects = [];
   state.floatingTexts = [];
   state.enemyProjectiles = [];
+  state.playerProjectiles = [];
   state.nextBossTime = CONFIG.bossFirstTime;
   state.bossStage = 0;
   state.particles = [];
@@ -1950,6 +2048,8 @@ function resetGame() {
   state.extractionGoal = 8;
 
   resetPlayer();
+  hideSplash();
+  showSplash(null, "Zero Enters The Hunt", "UPPER CITY BREACH", 3.1);
   setStory("“Zero，听得到吗？上城封锁已经落下。你只能往前撕。”");
 
   for (let i = 0; i < 8; i += 1) {
@@ -2164,7 +2264,55 @@ function tryDash() {
   });
 }
 
-function autoSlash() {
+function firePrimaryWeapon(camera) {
+  if (player.shootCooldownTimer > 0) {
+    return;
+  }
+
+  const aimWorld = screenToWorld(mouse.x, mouse.y, camera);
+  const direction = normalizeVector(aimWorld.x - player.x, aimWorld.y - player.y);
+  player.facing = Math.atan2(direction.y, direction.x);
+
+  const palette = getBuildPalette();
+  const fireRateScale = player.buildCore === "ghost" ? 0.88 : player.buildCore === "domain" ? 0.95 : 1;
+  const overdriveScale = player.overdrive > 0 ? 0.84 : 1;
+  player.shootCooldownTimer = Math.max(0.055, player.shootCooldownBase * fireRateScale * overdriveScale);
+
+  const shotSpeed = player.shootSpeed * (player.buildCore === "ghost" ? 1.08 : 1) * (player.overdrive > 0 ? 1.1 : 1);
+  const shotDamage = player.shootDamage + state.threatLevel * 1.05 + (player.overdrive > 0 ? 5 : 0);
+
+  state.playerProjectiles.push({
+    x: player.x + direction.x * 24,
+    y: player.y + direction.y * 24,
+    vx: direction.x * shotSpeed,
+    vy: direction.y * shotSpeed,
+    radius: player.buildCore === "domain" ? 7 : 6,
+    damage: shotDamage,
+    color: palette.secondary,
+    life: player.shootRange / shotSpeed,
+    remainingHits: player.ghostUltimate ? 2 : 1,
+    hitIds: new Set(),
+  });
+
+  state.effects.push({
+    type: "shotTrail",
+    x: player.x + direction.x * 16,
+    y: player.y + direction.y * 16,
+    targetX: player.x + direction.x * 52,
+    targetY: player.y + direction.y * 52,
+    radius: 0,
+    life: 0.06,
+    color: palette.secondary,
+    variant: player.buildCore,
+  });
+  spawnParticles(player.x + direction.x * 18, player.y + direction.y * 18, palette.secondary, 4, 28, 120, 0.06, 0.12);
+}
+
+function castAutoSlashSkill() {
+  if (player.slashCooldownTimer > 0) {
+    return;
+  }
+
   const targets = enemies
     .filter((enemy) => dist(player, enemy) <= player.slashRange)
     .sort((left, right) => dist(player, left) - dist(player, right))
@@ -2174,7 +2322,7 @@ function autoSlash() {
     return;
   }
 
-  player.slashCooldownTimer = player.slashCooldownBase * (player.overdrive > 0 ? 0.72 : 1);
+  player.slashCooldownTimer = Math.max(0.42, player.slashCooldownBase * 1.65 * (player.overdrive > 0 ? 0.78 : 1));
   const primary = targets[0];
   player.facing = Math.atan2(primary.y - player.y, primary.x - player.x);
   const palette = getBuildPalette();
@@ -2191,7 +2339,7 @@ function autoSlash() {
       color: palette.slash,
       variant: player.buildCore,
     });
-    damageEnemy(enemy, player.slashDamage + state.threatLevel * 1.8 + (player.overdrive > 0 ? 16 : 0), "slash");
+    damageEnemy(enemy, player.slashDamage * 0.76 + state.threatLevel * 1.2 + (player.overdrive > 0 ? 10 : 0), "slash");
     damageWorldObjects(enemy.x, enemy.y, 56);
   });
 }
@@ -2731,6 +2879,53 @@ function updatePickups(dt) {
 }
 
 function updateProjectiles(dt) {
+  for (const shot of state.playerProjectiles) {
+    shot.x += shot.vx * dt;
+    shot.y += shot.vy * dt;
+    shot.life -= dt;
+
+    let blocked = false;
+    for (const rect of CITY.solids) {
+      if (rectIntersectsCircle(rect, shot.x, shot.y, shot.radius)) {
+        shot.life = 0;
+        blocked = true;
+        break;
+      }
+    }
+
+    if (blocked) {
+      continue;
+    }
+
+    for (const enemy of [...enemies]) {
+      if (shot.hitIds.has(enemy)) {
+        continue;
+      }
+
+      if (dist(enemy, shot) > enemy.radius + shot.radius) {
+        continue;
+      }
+
+      shot.hitIds.add(enemy);
+      damageEnemy(enemy, shot.damage, "shot");
+      damageWorldObjects(enemy.x, enemy.y, 28);
+      spawnParticles(shot.x, shot.y, shot.color, 5, 38, 140, 0.08, 0.2);
+      state.effects.push({
+        type: "burst",
+        x: shot.x,
+        y: shot.y,
+        radius: 16,
+        life: 0.08,
+        color: shot.color,
+      });
+      shot.remainingHits -= 1;
+      if (shot.remainingHits <= 0) {
+        shot.life = 0;
+      }
+      break;
+    }
+  }
+
   for (const shot of state.enemyProjectiles) {
     if (shot.kind === "laserBeam") {
       shot.life -= dt;
@@ -2804,6 +2999,9 @@ function updateProjectiles(dt) {
   state.enemyProjectiles = state.enemyProjectiles.filter((shot) => {
     return shot.life > 0 && shot.x > -40 && shot.x < world.width + 40 && shot.y > -40 && shot.y < world.height + 40;
   });
+  state.playerProjectiles = state.playerProjectiles.filter((shot) => {
+    return shot.life > 0 && shot.x > -60 && shot.x < world.width + 60 && shot.y > -60 && shot.y < world.height + 60;
+  });
 }
 
 function updateEffects(dt) {
@@ -2857,6 +3055,12 @@ function updateStoryEvents() {
 }
 
 function update(dt) {
+  splashTimer = Math.max(0, splashTimer - dt);
+  if (splashTimer <= 0 && !splashStage.classList.contains("hidden")) {
+    hideSplash();
+    tryOpenNextChoice();
+  }
+
   if (state.mode !== "playing") {
     return;
   }
@@ -2870,6 +3074,7 @@ function update(dt) {
   updateJammerEffects();
 
   player.dashTime = Math.max(0, player.dashTime - dt);
+  player.shootCooldownTimer = Math.max(0, player.shootCooldownTimer - dt);
   player.slashCooldownTimer = Math.max(0, player.slashCooldownTimer - dt);
   player.invuln = Math.max(0, player.invuln - dt);
   player.auraTick = Math.max(0, player.auraTick - dt);
@@ -2910,6 +3115,12 @@ function update(dt) {
   const jamPenalty = 1 - state.jamSlow;
   const speed = (player.dashTime > 0 ? player.dashSpeed : player.moveSpeed) * speedBoost * jamPenalty;
   moveEntityWithSolids(player, input.x * speed * dt, input.y * speed * dt, 0.92);
+
+  const baseCamera = getCamera();
+  if (mouse.inside) {
+    const aimWorld = screenToWorld(mouse.x, mouse.y, baseCamera);
+    player.facing = Math.atan2(aimWorld.y - player.y, aimWorld.x - player.x);
+  }
 
   if (player.dashTime > 0) {
     for (const enemy of [...enemies]) {
@@ -2959,8 +3170,8 @@ function update(dt) {
     }
   }
 
-  if (player.slashCooldownTimer <= 0) {
-    autoSlash();
+  if (mouse.down) {
+    firePrimaryWeapon(baseCamera);
   }
 
   updateStageEvents(dt);
@@ -3212,7 +3423,7 @@ function drawEffects(camera) {
     ctx.save();
     ctx.globalAlpha = alpha;
 
-    if (effect.type === "slash" || effect.type === "bolt") {
+    if (effect.type === "slash" || effect.type === "bolt" || effect.type === "shotTrail") {
       const targetX = effect.targetX - camera.x;
       const targetY = effect.targetY - camera.y;
       ctx.strokeStyle = effect.color;
@@ -3220,7 +3431,7 @@ function drawEffects(camera) {
       ctx.shadowColor = effect.color;
 
       if (effect.variant === "fang") {
-        ctx.lineWidth = effect.type === "bolt" ? 4 : 7;
+        ctx.lineWidth = effect.type === "bolt" ? 4 : effect.type === "shotTrail" ? 3 : 7;
         ctx.beginPath();
         ctx.moveTo(pos.x, pos.y);
         ctx.lineTo(targetX, targetY);
@@ -3231,23 +3442,23 @@ function drawEffects(camera) {
           ctx.stroke();
         }
       } else if (effect.variant === "ghost") {
-        ctx.lineWidth = effect.type === "bolt" ? 3 : 5;
-        ctx.setLineDash(effect.type === "bolt" ? [8, 6] : [18, 10]);
+        ctx.lineWidth = effect.type === "bolt" ? 3 : effect.type === "shotTrail" ? 2.5 : 5;
+        ctx.setLineDash(effect.type === "bolt" ? [8, 6] : effect.type === "shotTrail" ? [10, 8] : [18, 10]);
         ctx.beginPath();
         ctx.moveTo(pos.x, pos.y);
         ctx.lineTo(targetX, targetY);
         ctx.stroke();
         ctx.setLineDash([]);
       } else if (effect.variant === "domain") {
-        ctx.lineWidth = effect.type === "bolt" ? 4 : 6;
+        ctx.lineWidth = effect.type === "bolt" ? 4 : effect.type === "shotTrail" ? 3 : 6;
         ctx.beginPath();
         ctx.moveTo(pos.x, pos.y);
         const mx = (pos.x + targetX) / 2;
-        const my = (pos.y + targetY) / 2 - 20;
+        const my = (pos.y + targetY) / 2 - (effect.type === "shotTrail" ? 10 : 20);
         ctx.quadraticCurveTo(mx, my, targetX, targetY);
         ctx.stroke();
       } else {
-        ctx.lineWidth = 5;
+        ctx.lineWidth = effect.type === "shotTrail" ? 3 : 5;
         ctx.beginPath();
         ctx.moveTo(pos.x, pos.y);
         ctx.lineTo(targetX, targetY);
@@ -3639,60 +3850,62 @@ function drawEnemies(camera) {
     const pos = worldToScreen(enemy.x, enemy.y, camera);
     const healthRatio = clamp(enemy.hp / enemy.maxHp, 0, 1);
     const enemySprite = getEnemySprite(enemy);
+    const aimAngle = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+    const faceRight = Math.cos(aimAngle) >= 0 ? 1 : -1;
+    const bob = enemy.type === "boss" ? Math.sin(state.time * 2.2 + enemy.x * 0.01) * 2.2 : Math.sin(state.time * 3.4 + enemy.x * 0.02) * 1.4;
 
     ctx.save();
-    ctx.translate(pos.x, pos.y);
-    ctx.rotate(Math.atan2(player.y - enemy.y, player.x - enemy.x));
+    ctx.translate(pos.x, pos.y + bob);
 
     if (enemySprite) {
-      const facing = Math.cos(Math.atan2(player.y - enemy.y, player.x - enemy.x)) >= 0 ? 1 : -1;
       if (enemy.type === "boss") {
-        drawSpriteBillboard(enemySprite, 124, 124, {
-          facing,
-          y: -84,
+        drawSpriteBillboard(enemySprite, enemy.radius * 2.68, enemy.radius * 2.68, {
+          facing: faceRight,
+          y: -enemy.radius * 1.78,
           rotation: 0.03,
-          shadowWidth: 30,
+          shadowWidth: enemy.radius * 0.62,
           shadowHeight: 11,
-          shadowY: 36,
+          shadowY: enemy.radius * 0.75,
         });
       } else if (enemy.type === "elite") {
-        drawSpriteBillboard(enemySprite, 88, 88, {
-          facing,
-          y: -58,
+        drawSpriteBillboard(enemySprite, enemy.radius * 3.2, enemy.radius * 3.2, {
+          facing: faceRight,
+          y: -enemy.radius * 1.9,
           rotation: 0.03,
-          shadowWidth: 22,
+          shadowWidth: enemy.radius * 0.76,
           shadowHeight: 8,
-          shadowY: 26,
+          shadowY: enemy.radius * 0.86,
         });
       } else if (enemy.type === "shooter") {
-        drawSpriteBillboard(enemySprite, 82, 82, {
-          facing,
-          y: -54,
+        drawSpriteBillboard(enemySprite, enemy.radius * 3.7, enemy.radius * 3.7, {
+          facing: faceRight,
+          y: -enemy.radius * 1.95,
           rotation: 0.02,
-          shadowWidth: 20,
+          shadowWidth: enemy.radius * 0.9,
           shadowHeight: 8,
-          shadowY: 24,
+          shadowY: enemy.radius * 0.84,
         });
       } else if (enemy.type === "charger") {
-        drawSpriteBillboard(enemySprite, 92, 92, {
-          facing,
-          y: -58,
+        drawSpriteBillboard(enemySprite, enemy.radius * 4.2, enemy.radius * 4.2, {
+          facing: faceRight,
+          y: -enemy.radius * 2.02,
           rotation: 0.04,
-          shadowWidth: 22,
+          shadowWidth: enemy.radius * 0.92,
           shadowHeight: 8,
-          shadowY: 26,
+          shadowY: enemy.radius * 0.88,
         });
       } else {
-        drawSpriteBillboard(enemySprite, 78, 78, {
-          facing,
-          y: -50,
+        drawSpriteBillboard(enemySprite, enemy.radius * 4.15, enemy.radius * 4.15, {
+          facing: faceRight,
+          y: -enemy.radius * 1.96,
           rotation: 0.02,
-          shadowWidth: 18,
+          shadowWidth: enemy.radius * 0.86,
           shadowHeight: 7,
-          shadowY: 23,
+          shadowY: enemy.radius * 0.84,
         });
       }
     } else if (enemy.type === "boss") {
+      ctx.scale(faceRight, 1);
       ctx.shadowBlur = 34;
       ctx.shadowColor = "rgba(255,77,109,0.75)";
       drawBipedFigure(enemy.radius * 0.9, {
@@ -3709,6 +3922,7 @@ function drawEnemies(camera) {
       ctx.arc(0, 0, enemy.radius + 12, 0, Math.PI * 2);
       ctx.stroke();
     } else if (enemy.type === "elite") {
+      ctx.scale(faceRight, 1);
       ctx.shadowBlur = 28;
       ctx.shadowColor = "rgba(255,77,109,0.75)";
       drawBipedFigure(enemy.radius * 0.78, {
@@ -3720,6 +3934,7 @@ function drawEnemies(camera) {
         shadow: "rgba(255,77,109,0.24)",
       }, "elite", { broad: true, spikes: true, weapon: "blade" });
     } else if (enemy.type === "shooter") {
+      ctx.scale(faceRight, 1);
       ctx.shadowBlur = 18;
       ctx.shadowColor = "rgba(255,209,102,0.6)";
       drawBipedFigure(enemy.radius * 0.78, {
@@ -3731,6 +3946,7 @@ function drawEnemies(camera) {
         shadow: "rgba(255,209,102,0.22)",
       }, "shooter", { weapon: "gun" });
     } else if (enemy.type === "charger") {
+      ctx.scale(faceRight, 1);
       ctx.shadowBlur = 18;
       ctx.shadowColor = "rgba(255,138,125,0.7)";
       drawBipedFigure(enemy.radius * 0.8, {
@@ -3742,6 +3958,7 @@ function drawEnemies(camera) {
         shadow: "rgba(255,138,125,0.2)",
       }, "charger", { broad: true, weapon: "blade" });
     } else if (enemy.type === "laser") {
+      ctx.scale(faceRight, 1);
       ctx.shadowBlur = 18;
       ctx.shadowColor = "rgba(255,77,109,0.7)";
       drawBipedFigure(enemy.radius * 0.8, {
@@ -3753,6 +3970,7 @@ function drawEnemies(camera) {
         shadow: "rgba(255,77,109,0.2)",
       }, "shooter", { weapon: "gun" });
     } else if (enemy.type === "missile") {
+      ctx.scale(faceRight, 1);
       ctx.shadowBlur = 18;
       ctx.shadowColor = "rgba(255,138,125,0.7)";
       drawBipedFigure(enemy.radius * 0.82, {
@@ -3803,6 +4021,7 @@ function drawEnemies(camera) {
       ctx.lineTo(0, enemy.radius + 4);
       ctx.stroke();
     } else {
+      ctx.scale(faceRight, 1);
       ctx.shadowBlur = 16;
       ctx.shadowColor = "rgba(89,232,255,0.65)";
       drawBipedFigure(enemy.radius * 0.74, {
@@ -3825,6 +4044,24 @@ function drawEnemies(camera) {
 }
 
 function drawProjectiles(camera) {
+  for (const shot of state.playerProjectiles) {
+    const pos = worldToScreen(shot.x, shot.y, camera);
+    ctx.save();
+    ctx.translate(pos.x, pos.y);
+    ctx.rotate(Math.atan2(shot.vy, shot.vx));
+    ctx.shadowBlur = 14;
+    ctx.shadowColor = shot.color;
+    ctx.fillStyle = shot.color;
+    ctx.beginPath();
+    ctx.moveTo(11, 0);
+    ctx.lineTo(-8, -4.5);
+    ctx.lineTo(-2, 0);
+    ctx.lineTo(-8, 4.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
   for (const shot of state.enemyProjectiles) {
     const pos = worldToScreen(shot.x, shot.y, camera);
     ctx.save();
@@ -3882,7 +4119,7 @@ function drawPlayer(camera) {
 
   ctx.save();
   ctx.translate(pos.x, pos.y + bob);
-  ctx.rotate(player.facing + sway);
+  ctx.rotate(sway * 0.45);
   ctx.scale(pulse, pulse);
 
   if (player.invuln > 0) {
@@ -3951,6 +4188,41 @@ function drawPlayer(camera) {
     ctx.fillStyle = palette.primary;
     ctx.fillRect(6, -4, 12, 3);
   }
+  ctx.restore();
+}
+
+function drawAimReticle(camera) {
+  if (!mouse.inside || state.mode === "menu") {
+    return;
+  }
+
+  const palette = getBuildPalette();
+  const playerPos = worldToScreen(player.x, player.y, camera);
+  ctx.save();
+  ctx.globalAlpha = mouse.down ? 0.7 : 0.42;
+  ctx.strokeStyle = palette.secondary;
+  ctx.lineWidth = mouse.down ? 2.4 : 1.6;
+  ctx.shadowBlur = 12;
+  ctx.shadowColor = palette.secondary;
+  ctx.beginPath();
+  ctx.moveTo(playerPos.x, playerPos.y - 8);
+  ctx.lineTo(mouse.x, mouse.y);
+  ctx.stroke();
+
+  ctx.globalAlpha = 1;
+  ctx.beginPath();
+  ctx.arc(mouse.x, mouse.y, mouse.down ? 12 : 10, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(mouse.x - 16, mouse.y);
+  ctx.lineTo(mouse.x - 5, mouse.y);
+  ctx.moveTo(mouse.x + 5, mouse.y);
+  ctx.lineTo(mouse.x + 16, mouse.y);
+  ctx.moveTo(mouse.x, mouse.y - 16);
+  ctx.lineTo(mouse.x, mouse.y - 5);
+  ctx.moveTo(mouse.x, mouse.y + 5);
+  ctx.lineTo(mouse.x, mouse.y + 16);
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -4153,10 +4425,7 @@ function drawHud(camera) {
 function draw() {
   const shakeX = state.shake > 0 ? randomRange(-state.shake, state.shake) : 0;
   const shakeY = state.shake > 0 ? randomRange(-state.shake, state.shake) : 0;
-  const camera = {
-    x: clamp(player.x - view.width / 2 + shakeX, 0, world.width - view.width),
-    y: clamp(player.y - view.height / 2 + shakeY, 0, world.height - view.height),
-  };
+  const camera = getCamera(shakeX, shakeY);
 
   drawBackground(camera);
   drawWorldBorder(camera);
@@ -4169,6 +4438,7 @@ function draw() {
   drawParticles(camera);
   drawForegroundDecor(camera);
   drawFloatingTexts(camera);
+  drawAimReticle(camera);
   drawHud(camera);
 }
 
@@ -4257,7 +4527,7 @@ startButton.addEventListener("click", () => {
 });
 
 window.addEventListener("keydown", (event) => {
-  if (["Space", "KeyW", "KeyA", "KeyS", "KeyD", "KeyE", "KeyR", "Digit1", "Digit2", "Digit3"].includes(event.code)) {
+  if (["Space", "KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "KeyR", "Digit1", "Digit2", "Digit3"].includes(event.code)) {
     event.preventDefault();
   }
 
@@ -4278,6 +4548,10 @@ window.addEventListener("keydown", (event) => {
     tryDash();
   }
 
+  if (event.code === "KeyQ") {
+    castAutoSlashSkill();
+  }
+
   if (event.code === "KeyE") {
     fireNova();
   }
@@ -4289,6 +4563,33 @@ window.addEventListener("keydown", (event) => {
 
 window.addEventListener("keyup", (event) => {
   keys.delete(event.code);
+});
+
+canvas.addEventListener("mousemove", (event) => {
+  updateMousePosition(event);
+});
+
+canvas.addEventListener("mouseenter", (event) => {
+  updateMousePosition(event);
+});
+
+canvas.addEventListener("mouseleave", () => {
+  mouse.inside = false;
+  mouse.down = false;
+});
+
+canvas.addEventListener("mousedown", (event) => {
+  updateMousePosition(event);
+  mouse.down = true;
+  event.preventDefault();
+});
+
+window.addEventListener("mouseup", () => {
+  mouse.down = false;
+});
+
+canvas.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
 });
 
 renderSkillTree();

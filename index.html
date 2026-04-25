@@ -21,14 +21,22 @@
           <strong>WASD</strong>
         </div>
         <div class="card">
+          <span class="label">Aim / Fire</span>
+          <strong>Mouse</strong>
+        </div>
+        <div class="card">
           <span class="label">Dash</span>
           <strong>Space</strong>
+        </div>
+        <div class="card">
+          <span class="label">Slash Skill</span>
+          <strong>Q</strong>
         </div>
         <div class="card">
           <span class="label">Nova</span>
           <strong>E</strong>
         </div>
-        <div class="card">
+        <div class="card wide">
           <span class="label">Choose</span>
           <strong>1 / 2 / 3</strong>
         </div>
@@ -99,11 +107,22 @@
     <section class="game-panel">
       <canvas id="game" width="1600" height="900" aria-label="Zero game canvas"></canvas>
 
+      <div class="splash-stage hidden" id="splashStage" aria-hidden="true">
+        <div class="splash-backdrop"></div>
+        <div class="splash-card">
+          <img id="splashImage" alt="Zero splash art">
+          <div class="splash-copy">
+            <p class="overlay-tag" id="splashTag">ZERO AWAKENING</p>
+            <h3 id="splashTitle">Zero Enters The Hunt</h3>
+          </div>
+        </div>
+      </div>
+
       <div class="overlay" id="overlay">
         <div class="overlay-card">
           <p class="overlay-tag">ESCAPE THE UPPER CITY</p>
           <h2 id="overlayTitle">Zero Enters The Hunt</h2>
-          <p id="overlayText">WASD to move, Space to dash, E to cast Nova. Kill enemies for shards, level up for random upgrades, and unlock Zero-only tree nodes on awakening milestones. The first city mech arrives at 60 seconds.</p>
+          <p id="overlayText">WASD to move, mouse to aim and shoot, Space to dash, Q to release the auto-target slash skill, and E to cast Nova. Kill enemies for shards, level up for random upgrades, and unlock Zero-only tree nodes on awakening milestones. The first city mech arrives at 60 seconds.</p>
           <button id="startButton" type="button">Start Run</button>
         </div>
       </div>

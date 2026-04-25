@@ -25,6 +25,7 @@ body {
     linear-gradient(135deg, var(--bg-0), #05070f 42%, var(--bg-1));
   color: var(--text);
   font-family: "Segoe UI Variable", "Microsoft YaHei UI", sans-serif;
+  overflow: hidden;
 }
 
 body::before,
@@ -52,8 +53,9 @@ body::after {
 .shell {
   width: min(2000px, calc(100vw - 28px));
   margin: 5px auto;
+  height: calc(100vh - 10px);
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: 340px minmax(0, 1fr);
   gap: 10px;
   align-items: stretch;
 }
@@ -72,7 +74,7 @@ body::after {
 
 .hud-panel {
   padding: 15px;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .hud-panel::after {
@@ -127,6 +129,10 @@ body::after {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin: 26px 0 20px;
+}
+
+.card.wide {
+  grid-column: span 2;
 }
 
 .status-stack {
@@ -256,21 +262,28 @@ body::after {
 
 .game-panel {
   padding: 10px;
-  min-height: min(60vh, 600px);
-  display: flex;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
 }
 
 canvas {
-  width: 100%;
+  width: min(100%, calc((100vh - 52px) * 16 / 9));
   height: auto;
+  max-height: calc(100vh - 52px);
   aspect-ratio: 16 / 9;
   display: block;
   border-radius: 22px;
   background: linear-gradient(180deg, rgba(5, 10, 22, 0.9), rgba(6, 10, 24, 0.96));
+  cursor: crosshair;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
 }
 
 .overlay,
-.choice-modal {
+.choice-modal,
+.splash-stage {
   position: absolute;
   inset: 18px;
   border-radius: 22px;
@@ -282,9 +295,54 @@ canvas {
 }
 
 .overlay.hidden,
-.choice-modal.hidden {
+.choice-modal.hidden,
+.splash-stage.hidden {
   opacity: 0;
   pointer-events: none;
+}
+
+.splash-stage {
+  z-index: 4;
+  background: rgba(3, 6, 18, 0.18);
+  backdrop-filter: blur(2px);
+}
+
+.splash-backdrop {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at center, rgba(89, 232, 255, 0.24), transparent 28%),
+    radial-gradient(circle at 70% 30%, rgba(255, 77, 109, 0.2), transparent 32%),
+    rgba(5, 8, 18, 0.68);
+  animation: splashPulse 1.4s ease forwards;
+}
+
+.splash-card {
+  position: relative;
+  display: grid;
+  gap: 16px;
+  justify-items: center;
+  animation: splashReveal 1.5s cubic-bezier(.2,.8,.2,1) forwards;
+}
+
+.splash-card img {
+  width: min(54vw, 540px);
+  max-height: min(76vh, 720px);
+  object-fit: contain;
+  filter:
+    drop-shadow(0 30px 44px rgba(0, 0, 0, 0.42))
+    drop-shadow(0 0 24px rgba(89, 232, 255, 0.18));
+}
+
+.splash-copy {
+  text-align: center;
+  text-shadow: 0 10px 22px rgba(0, 0, 0, 0.34);
+}
+
+.splash-copy h3 {
+  margin: 8px 0 0;
+  font: 800 clamp(1.6rem, 3vw, 2.8rem) "Bahnschrift", "Arial Narrow", sans-serif;
+  letter-spacing: 0.08em;
 }
 
 .overlay-card,
@@ -362,8 +420,13 @@ button:hover {
 }
 
 @media (max-width: 1180px) {
+  body {
+    overflow: auto;
+  }
+
   .shell {
     grid-template-columns: 1fr;
+    height: auto;
   }
 
   .hud-panel {
@@ -372,6 +435,12 @@ button:hover {
 
   .game-panel {
     order: 1;
+    min-height: auto;
+  }
+
+  canvas {
+    width: 100%;
+    max-height: none;
   }
 }
 
@@ -386,6 +455,7 @@ button:hover {
     width: min(100vw - 18px, 1500px);
     gap: 12px;
     margin: 9px auto;
+    height: auto;
   }
 
   .hud-panel,
@@ -407,8 +477,41 @@ button:hover {
     grid-template-columns: 1fr 1fr;
   }
 
+  .card.wide {
+    grid-column: auto;
+  }
+
   .overlay-card,
   .choice-card {
     padding: 24px;
+  }
+}
+
+@keyframes splashReveal {
+  0% {
+    opacity: 0;
+    transform: translateY(24px) scale(0.92);
+  }
+  18% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  82% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes splashPulse {
+  0% {
+    opacity: 0.55;
+  }
+  18%,
+  100% {
+    opacity: 1;
   }
 }
