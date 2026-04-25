@@ -64,22 +64,23 @@ const SPRITES = {
   enemyShooter: loadSprite("assets/enemy-shooter-v1.png"),
   enemyCharger: loadSprite("assets/enemy-charger-v1.png"),
   enemyBoss: loadSprite("assets/enemy-boss-v1.png"),
+  puddle: loadSprite("assets/puddle-texture-v1.png"),
 };
 
 const CONFIG = {
   playerRadius: 22,
-  maxHp: 100,
+  maxHp: 110,
   baseMoveSpeed: 330,
-  baseSlashCooldown: 0.42,
-  baseSlashRange: 250,
-  baseSlashDamage: 32,
+  baseSlashCooldown: 0.7,
+  baseSlashRange: 152,
+  baseSlashDamage: 112,
   baseDashDuration: 0.18,
   baseDashSpeed: 980,
   baseDashDamage: 80,
   baseDashRecharge: 1.2,
   baseDashCharges: 1,
-  baseNovaRadius: 310,
-  baseNovaDamage: 999,
+  baseNovaRadius: 290,
+  baseNovaDamage: 520,
   baseNovaCost: 100,
   baseEnemySpeed: 100,
   spawnInterval: 1.12,
@@ -89,8 +90,8 @@ const CONFIG = {
   bossFirstTime: 60,
   bossEvery: 70,
   extractionTime: 185,
-  baseShootCooldown: 0.16,
-  baseShootDamage: 18,
+  baseShootCooldown: 0.14,
+  baseShootDamage: 24,
   baseShootSpeed: 1080,
   baseShootRange: 720,
 };
@@ -152,7 +153,8 @@ const UPGRADES = [
     description: "万解半径 +50，能量获取 +25%。",
     apply() {
       player.novaRadius += 50;
-      player.novaGainMult += 0.25;
+      player.novaHeatPerCast = Math.max(28, player.novaHeatPerCast - 6);
+      player.novaHeatDecay += 1.6;
     },
   },
   {
@@ -262,9 +264,9 @@ const SKILL_NODES = [
     description: "万解释放两次回响脉冲，范围与能量收益同步强化。",
     requires: ["domain_1"],
     apply() {
-      player.novaEchoes = 2;
-      player.novaRadius += 45;
-      player.novaGainMult += 0.15;
+      player.novaEchoes = Math.max(player.novaEchoes, 1);
+      player.novaRadius += 36;
+      player.auraHeatCooldown += 1.6;
     },
   },
 ];
@@ -316,6 +318,51 @@ const PATH_TITLES = {
 };
 
 const TIER_ORDER = ["common", "uncommon", "rare", "epic", "legendary"];
+
+const WEATHER_TYPES = {
+  ionStorm: {
+    label: "Ion Storm",
+    burst: "Ion storm rolling in",
+    story: '"Upper City dumped conductive rain into the block. Use the charged puddles before the hunters do."',
+    objective: "Ion storm active. Charged puddles cool Nova heat and punish enemies standing inside them.",
+    hud: "WEATHER ION STORM",
+    duration: 18,
+  },
+};
+
+const STAGE_REWARDS = [
+  {
+    time: 24,
+    label: "Street Sync",
+    apply() {
+      player.hp = clamp(player.hp + 24, 0, player.maxHp);
+      player.shootDamage += 3;
+      player.slashDamage += 8;
+      player.dashCharges = player.dashChargesMax;
+    },
+  },
+  {
+    time: 78,
+    label: "Hunter Sync",
+    apply() {
+      player.maxHp += 10;
+      player.hp = clamp(player.hp + 18, 0, player.maxHp);
+      player.damageTakenScale *= 0.95;
+      player.dashRechargeBase = Math.max(0.42, player.dashRechargeBase - 0.08);
+      player.moveSpeed += 12;
+    },
+  },
+  {
+    time: 138,
+    label: "Apex Sync",
+    apply() {
+      player.hp = clamp(player.hp + 16, 0, player.maxHp);
+      player.novaHeatDecay += 1.2;
+      player.shootDamage += 4;
+      player.slashDamage += 6;
+    },
+  },
+];
 
 const BUILD_UPGRADES = [
   {
@@ -415,11 +462,12 @@ const BUILD_UPGRADES = [
     path: "domain",
     minAffinity: 1,
     title: "Capacitor Bloom",
-    description: "Nova cost -18, radius +44, energy gain +18%.",
+    description: "Nova cost -12, radius +36, heat per cast falls, and the reactor cools faster.",
     apply() {
-      player.novaCost = Math.max(40, player.novaCost - 18);
-      player.novaRadius += 44;
-      player.novaGainMult += 0.18;
+      player.novaCost = Math.max(52, player.novaCost - 12);
+      player.novaRadius += 36;
+      player.novaHeatPerCast = Math.max(24, player.novaHeatPerCast - 8);
+      player.novaHeatDecay += 2.4;
     },
   },
   {
@@ -427,11 +475,12 @@ const BUILD_UPGRADES = [
     path: "domain",
     minAffinity: 2,
     title: "Ion Loop",
-    description: "Aura grows stronger and aura hits feed nova energy.",
+    description: "Aura grows stronger, feeds some nova, and actively bleeds reactor heat while it hits.",
     apply() {
       player.auraDamage += 14;
       player.auraRadius += 40;
-      player.auraNovaGain += 3;
+      player.auraNovaGain += 1.5;
+      player.auraHeatCooldown += 2.4;
     },
   },
   {
@@ -450,42 +499,45 @@ const BUILD_UPGRADES = [
     path: "domain",
     minAffinity: 3,
     title: "Null Field",
-    description: "Jammer effects are heavily reduced; nova damage +140.",
+    description: "Jammer effects are heavily reduced; nova damage +90.",
     apply() {
       player.jamResist = Math.min(0.9, player.jamResist + 0.7);
-      player.novaDamage += 140;
+      player.novaDamage += 90;
     },
   },
   {
     id: "hybrid_weapon",
     path: "neutral",
     repeatable: true,
+    maxRepeats: 2,
     title: "Weapon Sync",
-    description: "Slash damage +8 and nova damage +50.",
+    description: "Slash damage +6 and nova damage +30.",
     apply() {
-      player.slashDamage += 8;
-      player.novaDamage += 50;
+      player.slashDamage += 6;
+      player.novaDamage += 30;
     },
   },
   {
     id: "hybrid_mobility",
     path: "neutral",
     repeatable: true,
+    maxRepeats: 2,
     title: "Mobility Sync",
-    description: "Move speed +18 and dash damage +20.",
+    description: "Move speed +14 and dash damage +14.",
     apply() {
-      player.moveSpeed += 18;
-      player.dashDamage += 20;
+      player.moveSpeed += 14;
+      player.dashDamage += 14;
     },
   },
   {
     id: "hybrid_reactor",
     path: "neutral",
     repeatable: true,
+    maxRepeats: 2,
     title: "Reactor Sync",
-    description: "Nova gain +12% and XP gain +8%.",
+    description: "Reactor cooling improves and XP gain +8%.",
     apply() {
-      player.novaGainMult += 0.12;
+      player.novaHeatDecay += 0.8;
       player.xpGainMult += 0.08;
     },
   },
@@ -528,13 +580,14 @@ const BUILD_UPGRADES = [
     minAffinity: 4,
     minLevel: 7,
     title: "Ultimate: Abyss Broadcast",
-    description: "Zero Domain saturates the district. Nova gains extra echoes, aura pulses faster, aura feeds more energy, and pick-up bolts intensify.",
+    description: "Zero Domain saturates the district. Nova gains one more echo, aura cools the reactor harder, and pick-up bolts intensify.",
     apply() {
       player.domainUltimate = true;
-      player.novaEchoes += 2;
+      player.novaEchoes += 1;
       player.auraRadius += 60;
       player.auraDamage += 20;
-      player.auraNovaGain += 4;
+      player.auraNovaGain += 2.2;
+      player.auraHeatCooldown += 3.2;
       player.pickupBoltDamage += 36;
       player.pickupBoltCount += 1;
     },
@@ -579,6 +632,13 @@ const state = {
   extractionZone: null,
   extractionHold: 0,
   extractionGoal: 8,
+  nextWeatherTime: 42,
+  weather: null,
+  stageRewardIndex: 0,
+  nextOutpostTime: 56,
+  outpostZone: null,
+  nextTrainTime: 72,
+  trainEvent: null,
 };
 
 const player = {
@@ -598,10 +658,17 @@ const player = {
   shootDamage: CONFIG.baseShootDamage,
   shootSpeed: CONFIG.baseShootSpeed,
   shootRange: CONFIG.baseShootRange,
+  shotChain: 0,
+  shotBurstEvery: 4,
+  burstShotBonus: 1.7,
   slashCooldownBase: CONFIG.baseSlashCooldown,
   slashCooldownTimer: 0,
   slashRange: CONFIG.baseSlashRange,
   slashDamage: CONFIG.baseSlashDamage,
+  slashArc: 1.3,
+  slashGuardTime: 0.18,
+  exposeDuration: 2.2,
+  exposedShotBonus: 0.28,
   slashTargets: 1,
   dashDuration: CONFIG.baseDashDuration,
   dashSpeed: CONFIG.baseDashSpeed,
@@ -620,6 +687,9 @@ const player = {
   novaDamage: CONFIG.baseNovaDamage,
   novaCost: CONFIG.baseNovaCost,
   novaGainMult: 1,
+  novaHeat: 0,
+  novaHeatDecay: 11,
+  novaHeatPerCast: 48,
   xpGainMult: 1,
   bleedDamage: 0,
   bleedDuration: 0,
@@ -649,6 +719,7 @@ const player = {
   bleedBurstRadius: 0,
   dashRefundOnKill: 0,
   auraNovaGain: 0,
+  auraHeatCooldown: 0,
   pickupBoltDamage: 0,
   pickupBoltCount: 0,
   jamResist: 0,
@@ -679,6 +750,10 @@ function normalizeVector(x, y) {
   return { x: x / length, y: y / length };
 }
 
+function angleDelta(a, b) {
+  return Math.atan2(Math.sin(a - b), Math.cos(a - b));
+}
+
 function distanceToSegment(point, start, end) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
@@ -692,14 +767,14 @@ function distanceToSegment(point, start, end) {
 function createCityMap() {
   const roads = {
     vertical: [
-      { x: 250, w: 170, glow: "rgba(89,232,255,0.14)" },
-      { x: 1180, w: 360, glow: "rgba(167,255,131,0.12)" },
-      { x: 2230, w: 170, glow: "rgba(255,77,109,0.12)" },
+      { x: 250, w: 170, glow: "rgba(89,232,255,0.12)" },
+      { x: 1180, w: 360, glow: "rgba(126,214,255,0.12)" },
+      { x: 2230, w: 170, glow: "rgba(89,232,255,0.1)" },
     ],
     horizontal: [
-      { y: 220, h: 160, glow: "rgba(255,77,109,0.12)" },
-      { y: 820, h: 220, glow: "rgba(89,232,255,0.12)" },
-      { y: 1380, h: 160, glow: "rgba(255,209,102,0.12)" },
+      { y: 220, h: 160, glow: "rgba(89,232,255,0.1)" },
+      { y: 820, h: 220, glow: "rgba(126,214,255,0.12)" },
+      { y: 1380, h: 160, glow: "rgba(89,232,255,0.11)" },
     ],
   };
 
@@ -709,12 +784,12 @@ function createCityMap() {
     { x: 1540, y: 0, w: 690, h: 220, tint: "rgba(22,30,58,0.45)" },
     { x: 2400, y: 0, w: 400, h: 220, tint: "rgba(26,24,52,0.45)" },
     { x: 0, y: 380, w: 250, h: 440, tint: "rgba(14,26,44,0.44)" },
-    { x: 420, y: 380, w: 760, h: 440, tint: "rgba(28,22,46,0.42)" },
-    { x: 1540, y: 380, w: 690, h: 440, tint: "rgba(18,28,50,0.42)" },
+    { x: 420, y: 380, w: 760, h: 440, tint: "rgba(20,28,46,0.42)" },
+    { x: 1540, y: 380, w: 690, h: 440, tint: "rgba(18,30,48,0.42)" },
     { x: 2400, y: 380, w: 400, h: 440, tint: "rgba(21,22,44,0.42)" },
     { x: 0, y: 1040, w: 250, h: 340, tint: "rgba(17,29,52,0.42)" },
-    { x: 420, y: 1040, w: 760, h: 340, tint: "rgba(23,23,46,0.42)" },
-    { x: 1540, y: 1040, w: 690, h: 340, tint: "rgba(20,27,48,0.42)" },
+    { x: 420, y: 1040, w: 760, h: 340, tint: "rgba(22,28,46,0.42)" },
+    { x: 1540, y: 1040, w: 690, h: 340, tint: "rgba(19,29,48,0.42)" },
     { x: 2400, y: 1040, w: 400, h: 340, tint: "rgba(24,21,43,0.42)" },
     { x: 0, y: 1540, w: 250, h: 260, tint: "rgba(15,31,54,0.44)" },
     { x: 420, y: 1540, w: 760, h: 260, tint: "rgba(18,22,48,0.42)" },
@@ -740,12 +815,12 @@ function createCityMap() {
   ];
 
   const billboards = [
-    { x: 455, y: 400, w: 92, h: 18, color: "#59e8ff", text: "ZERO" },
-    { x: 755, y: 670, w: 84, h: 18, color: "#ff4d6d", text: "NOVA" },
-    { x: 1600, y: 395, w: 104, h: 18, color: "#a7ff83", text: "UPCITY" },
-    { x: 1870, y: 715, w: 98, h: 18, color: "#ffd166", text: "RUN" },
-    { x: 570, y: 1285, w: 94, h: 18, color: "#59e8ff", text: "WOLF" },
-    { x: 1760, y: 1268, w: 86, h: 18, color: "#ff4d6d", text: "VOID" },
+    { x: 455, y: 400, w: 92, h: 18, color: "#7ddcff", text: "ZERO" },
+    { x: 755, y: 670, w: 84, h: 18, color: "#a9efff", text: "NOVA" },
+    { x: 1600, y: 395, w: 104, h: 18, color: "#8ce8ff", text: "UPCITY" },
+    { x: 1870, y: 715, w: 98, h: 18, color: "#a9efff", text: "RUN" },
+    { x: 570, y: 1285, w: 94, h: 18, color: "#7ddcff", text: "WOLF" },
+    { x: 1760, y: 1268, w: 86, h: 18, color: "#8ce8ff", text: "VOID" },
   ];
 
   const props = [
@@ -760,10 +835,10 @@ function createCityMap() {
   ];
 
   const puddles = [
-    { x: 610, y: 900, w: 140, h: 48, hue: "#59e8ff" },
-    { x: 1250, y: 1080, w: 180, h: 62, hue: "#59e8ff" },
-    { x: 1710, y: 970, w: 120, h: 40, hue: "#ff4d6d" },
-    { x: 2360, y: 905, w: 110, h: 38, hue: "#ffd166" },
+    { x: 610, y: 900, w: 140, h: 48, hue: "#7fcfff" },
+    { x: 1250, y: 1080, w: 180, h: 62, hue: "#7fcfff" },
+    { x: 1710, y: 970, w: 120, h: 40, hue: "#7fcfff" },
+    { x: 2360, y: 905, w: 110, h: 38, hue: "#7fcfff" },
   ];
 
   return { roads, districts, solids, billboards, props, puddles };
@@ -865,7 +940,9 @@ function spawnParticles(x, y, color, count, speedMin, speedMax, lifeMin, lifeMax
 }
 
 function nextXpRequirement(level) {
-  return Math.round(30 + level * 18 + level * level * 8);
+  const curve = 24 + level * 12 + level * level * (level <= 4 ? 5.5 : 8.5);
+  const lateTax = Math.max(0, level - 6) * 8;
+  return Math.round(curve + lateTax);
 }
 
 function worldToScreen(x, y, camera) {
@@ -934,12 +1011,151 @@ function getMeleeThreatScale(type) {
   return 1;
 }
 
+function isBossEnemy(enemy) {
+  return enemy?.type === "boss" || enemy?.type === "siege_boss";
+}
+
+function getActiveBosses() {
+  return enemies.filter((enemy) => isBossEnemy(enemy));
+}
+
 function setStory(text) {
   storyText.textContent = text;
 }
 
 function hasBossAlive() {
-  return enemies.some((enemy) => enemy.type === "boss");
+  return enemies.some((enemy) => isBossEnemy(enemy));
+}
+
+function getBossPylons() {
+  return enemies.filter((enemy) => enemy.type === "pylon");
+}
+
+function getBossCoreLinks(bossCores) {
+  if (bossCores.length < 2) {
+    return [];
+  }
+
+  const links = [];
+  for (let index = 0; index < bossCores.length; index += 1) {
+    links.push([bossCores[index], bossCores[(index + 1) % bossCores.length]]);
+  }
+
+  if (bossCores.length >= 4) {
+    links.push([bossCores[0], bossCores[2]]);
+    links.push([bossCores[1], bossCores[3]]);
+  }
+
+  return links;
+}
+
+function getLivingBoss() {
+  return enemies.find((enemy) => enemy.type === "boss") || null;
+}
+
+function isWorldFrozen() {
+  return state.mode !== "playing" || splashTimer > 0;
+}
+
+function getUnlockedTreePaths() {
+  return [...new Set(
+    player.treeNodes
+      .map((nodeId) => SKILL_NODES.find((node) => node.id === nodeId)?.path)
+      .filter(Boolean)
+  )];
+}
+
+function isPointInRoad(x, y, padding = 0) {
+  return CITY.roads.vertical.some((road) => x >= road.x - padding && x <= road.x + road.w + padding)
+    || CITY.roads.horizontal.some((road) => y >= road.y - padding && y <= road.y + road.h + padding);
+}
+
+function isPointInPuddle(x, y, padding = 0) {
+  if (!arePuddlesActive()) {
+    return false;
+  }
+
+  return CITY.puddles.some((puddle) => {
+    const radiusX = puddle.w * 0.5 + padding;
+    const radiusY = puddle.h * 0.5 + padding;
+    const dx = (x - puddle.x) / Math.max(1, radiusX);
+    const dy = (y - puddle.y) / Math.max(1, radiusY);
+    return dx * dx + dy * dy <= 1;
+  });
+}
+
+function getNovaGainFactor() {
+  return Math.max(0.22, 1 - player.novaHeat * 0.0075);
+}
+
+function gainNova(amount) {
+  if (amount <= 0) {
+    return;
+  }
+
+  player.nova = clamp(player.nova + amount * player.novaGainMult * getNovaGainFactor(), 0, 100);
+}
+
+function coolNovaHeat(amount) {
+  if (amount <= 0) {
+    return;
+  }
+
+  player.novaHeat = clamp(player.novaHeat - amount, 0, 100);
+}
+
+function startWeather(type) {
+  const config = WEATHER_TYPES[type];
+  if (!config) {
+    return;
+  }
+
+  state.weather = {
+    id: type,
+    life: config.duration,
+    pulse: 0,
+  };
+  setBurst(config.burst, 1.2);
+  setStory(config.story);
+}
+
+function endWeather() {
+  if (!state.weather) {
+    return;
+  }
+
+  setBurst(`${WEATHER_TYPES[state.weather.id].label} cleared`, 0.9);
+  state.weather = null;
+  state.nextWeatherTime = state.time + randomRange(42, 58);
+}
+
+function updateWeather(dt) {
+  if (!state.weather && !hasBossAlive() && !state.lockdownZone && state.time >= state.nextWeatherTime) {
+    startWeather("ionStorm");
+  }
+
+  if (!state.weather) {
+    return;
+  }
+
+  state.weather.life -= dt;
+  state.weather.pulse += dt * 4;
+  if (state.weather.life <= 0) {
+    endWeather();
+  }
+}
+
+function arePuddlesActive() {
+  return state.weather?.id === "ionStorm";
+}
+
+function updateStageRewards() {
+  while (state.stageRewardIndex < STAGE_REWARDS.length && state.time >= STAGE_REWARDS[state.stageRewardIndex].time) {
+    const reward = STAGE_REWARDS[state.stageRewardIndex];
+    reward.apply();
+    setBurst(`${reward.label} online`, 1.1);
+    state.stageRewardIndex += 1;
+  }
 }
 
 function setObjectiveText() {
@@ -954,6 +1170,18 @@ function setObjectiveText() {
     return;
   }
 
+  if (state.outpostZone) {
+    objectiveText.textContent = "Street outpost is active. Hold the cache circle, survive the pressure, and claim the district reward.";
+    return;
+  }
+
+  if (state.trainEvent) {
+    objectiveText.textContent = state.trainEvent.active
+      ? "Maglev is tearing across the block. Stay off the lane or drag hunters into it."
+      : "Track alarms are charging. Get clear of the highlighted rail lane before the maglev hits.";
+    return;
+  }
+
   if (state.bountyTarget && enemies.includes(state.bountyTarget)) {
     objectiveText.textContent = "A bounty elite is marked on the grid. Hunt it down before the district escalates again.";
     return;
@@ -965,8 +1193,23 @@ function setObjectiveText() {
     return;
   }
 
+  if (hasBossAlive() && getBossPylons().length > 0) {
+    objectiveText.textContent = "Four orbit cores are stabilizing the mech while a siege carrier cuts lanes with heavy missiles.";
+    return;
+  }
+
+  if (hasBossAlive()) {
+    objectiveText.textContent = "Two bosses are live. Dodge the siege missiles, then break the survivors before the district locks down.";
+    return;
+  }
+
   if (hasBossAlive()) {
     objectiveText.textContent = "执政机甲已落地。撕开装甲，躲开散射弹幕，夺取它的核心。";
+    return;
+  }
+
+  if (state.weather) {
+    objectiveText.textContent = WEATHER_TYPES[state.weather.id].objective;
     return;
   }
 
@@ -1192,27 +1435,89 @@ function createEnemy(type, x, y, scale = 1) {
     };
   }
 
+  if (type === "pylon") {
+    return {
+      x,
+      y,
+      type,
+      radius: 24,
+      speed: 0,
+      hp: 420 * scale,
+      maxHp: 420 * scale,
+      damage: 0,
+      touchCooldown: 0,
+      fireCooldown: 1.05,
+      bleedTimer: 0,
+      bleedDamage: 0,
+      xpValue: 10,
+      auraRadius: 190,
+      pulseTimer: 0.5,
+      suppressTick: 0.55,
+      lanceCooldown: 2.5,
+      lanceWarmup: 0,
+      lanceTargetX: x,
+      lanceTargetY: y,
+      repairDelay: 1.8,
+      bombardCooldown: 3.1,
+      bombardWarmup: 0,
+      bombardTargetX: x,
+      bombardTargetY: y,
+      bombardRadius: 72,
+    };
+  }
+
+  if (type === "siege_boss") {
+    const bossScale = getMeleeThreatScale("boss");
+    return {
+      x,
+      y,
+      type,
+      radius: 44 * bossScale,
+      speed: 102 + state.bossStage * 8,
+      hp: (1320 + state.bossStage * 360) * (1 + (bossScale - 1) * 0.72),
+      maxHp: (1320 + state.bossStage * 360) * (1 + (bossScale - 1) * 0.72),
+      damage: 24,
+      touchCooldown: 0,
+      fireCooldown: 0,
+      bleedTimer: 0,
+      bleedDamage: 0,
+      xpValue: 110,
+      missileCooldown: 1.25,
+      missileSpreadCooldown: 3.4,
+      broadsideCooldown: 5.4,
+      broadsideWarmup: 0,
+      broadsideAngle: 0,
+      driftAngle: Math.random() * Math.PI * 2,
+    };
+  }
+
   const bossScale = getMeleeThreatScale("boss");
   return {
     x,
     y,
     type: "boss",
     radius: 48 * bossScale,
-    speed: 120 + state.bossStage * 10,
-    hp: (850 + state.bossStage * 260) * (1 + (bossScale - 1) * 0.72),
-    maxHp: (850 + state.bossStage * 260) * (1 + (bossScale - 1) * 0.72),
-    damage: 30,
+    speed: 128 + state.bossStage * 12,
+    hp: (1540 + state.bossStage * 420) * (1 + (bossScale - 1) * 0.78),
+    maxHp: (1540 + state.bossStage * 420) * (1 + (bossScale - 1) * 0.78),
+    damage: 34,
     touchCooldown: 0,
     fireCooldown: 0,
     bleedTimer: 0,
     bleedDamage: 0,
     xpValue: 100,
     burstCooldown: 4.2,
+    volleyCooldown: 2.9,
+    linkCooldown: 3.4,
+    linkWarmup: 0,
+    linkActive: 0,
+    linkDamageTick: 0,
     summonCooldown: 7,
     chargeCooldown: 5.2,
     chargeTime: 0,
     chargeVector: { x: 0, y: 0 },
     chargeWindup: 0,
+    phase: 1,
   };
 }
 
@@ -1356,14 +1661,137 @@ function startExtractionWindow() {
   setStory('"Route breach found. Hold the beacon until the gate tears open, then get Zero out."');
 }
 
+function startStreetOutpost() {
+  if (state.outpostZone) {
+    return;
+  }
+
+  const anchor = chooseRandom(getEventAnchors());
+  state.outpostZone = {
+    x: anchor.x,
+    y: anchor.y,
+    radius: Math.max(110, anchor.radius * 0.52),
+    hold: 0,
+    goal: 5.5,
+    life: 20,
+    pulse: 0,
+    spawnTimer: 1.4,
+  };
+  state.nextOutpostTime = state.time + randomRange(58, 72);
+  setBurst("Street outpost surfaced", 1.2);
+  setStory('"A hidden district cache just surfaced. Hold the block and crack it before the city locks it again."');
+}
+
+function createOutpostRewardChoice() {
+  return {
+    tag: "DISTRICT CACHE",
+    title: "Choose Outpost Reward",
+    text: "The cache cracked open. Pick one district-grade module and keep moving before the city closes around you again.",
+    options: [
+      {
+        title: "Weapon Cache",
+        description: "Shoot damage +4 and fire rate improves slightly.",
+        badge: "Street Outpost",
+        badgeColor: "#7ddcff",
+        apply: () => {
+          player.shootDamage += 4;
+          player.shootCooldownBase = Math.max(0.095, player.shootCooldownBase - 0.01);
+          setBurst("Outpost reward: weapon cache", 1.2);
+        },
+      },
+      {
+        title: "Field Plating",
+        description: "Max HP +8, heal 14 HP, and take slightly less damage.",
+        badge: "Street Outpost",
+        badgeColor: "#7ddcff",
+        apply: () => {
+          player.maxHp += 8;
+          player.hp = clamp(player.hp + 14, 0, player.maxHp);
+          player.damageTakenScale *= 0.97;
+          setBurst("Outpost reward: field plating", 1.2);
+        },
+      },
+      {
+        title: "Blade Relay",
+        description: "Slash damage +10 and slash cooldown improves slightly.",
+        badge: "Street Outpost",
+        badgeColor: "#7ddcff",
+        apply: () => {
+          player.slashDamage += 10;
+          player.slashCooldownBase = Math.max(0.54, player.slashCooldownBase - 0.04);
+          setBurst("Outpost reward: blade relay", 1.2);
+        },
+      },
+    ],
+  };
+}
+
+function claimStreetOutpost() {
+  if (!state.outpostZone) {
+    return;
+  }
+
+  const outpostX = state.outpostZone.x;
+  const outpostY = state.outpostZone.y;
+  grantXp(26);
+  worldObjects.push({ kind: "crate", x: outpostX, y: outpostY, radius: 22, active: true, opened: false });
+  state.outpostZone = null;
+  queueChoice(createOutpostRewardChoice());
+}
+
+function startTrainEvent() {
+  if (state.trainEvent) {
+    return;
+  }
+
+  const road = chooseRandom(CITY.roads.horizontal);
+  const centerY = road.y + road.h / 2;
+  state.trainEvent = {
+    axis: "horizontal",
+    y: centerY,
+    width: road.h * 0.82,
+    warning: 2.6,
+    active: false,
+    x: Math.random() < 0.5 ? -340 : world.width + 340,
+    direction: Math.random() < 0.5 ? 1 : -1,
+    speed: 1450,
+    length: 340,
+    damageTick: 0,
+  };
+  state.nextTrainTime = state.time + randomRange(68, 84);
+  setBurst("Maglev warning", 1.1);
+  setStory('"Track alarms are live. A maglev is about to carve straight through the block."');
+}
+
 function spawnBoss() {
   state.bossStage += 1;
+  state.outpostZone = null;
+  state.trainEvent = null;
   const boss = createEnemy("boss", world.width / 2 + randomRange(-220, 220), -120, 1);
-  boss.hp += state.threatLevel * 70;
+  boss.hp += state.threatLevel * 180;
   boss.maxHp = boss.hp;
   enemies.push(boss);
+  const siegeBoss = createEnemy("siege_boss", world.width / 2 + randomRange(-260, 260), world.height + 120, 1);
+  siegeBoss.hp += state.threatLevel * 150;
+  siegeBoss.maxHp = siegeBoss.hp;
+  enemies.push(siegeBoss);
+  spawnBossPylons(boss, 4);
   setBurst(`执政机甲 Mk.${state.bossStage} 降下`, 1.8);
   setStory("“Boss 已部署。别被它拖住。打爆核心，不然整片街区都会封死。”");
+}
+
+function spawnBossPylons(boss, count) {
+  enemies = enemies.filter((enemy) => !(enemy.type === "pylon" && enemy.parentBoss === boss));
+
+  for (let index = 0; index < count; index += 1) {
+    const core = createEnemy("pylon", boss.x, boss.y, 1.08 + state.bossStage * 0.15);
+    core.parentBoss = boss;
+    core.orbitAngle = (Math.PI * 2 * index) / count;
+    core.orbitRadius = boss.radius + 94 + (index % 2) * 12;
+    core.orbitSpeed = 1.72 + index * 0.08;
+    core.fireCooldown = 0.78 + index * 0.12;
+    enemies.push(core);
+  }
 }
 
 function dropPickup(x, y, value) {
@@ -1394,7 +1822,8 @@ function openSupplyCrate(crate) {
     {
       text: "Supply: Nova boosted",
       apply() {
-        player.nova = clamp(player.nova + 34, 0, 100);
+        coolNovaHeat(14);
+        gainNova(22);
       },
     },
     {
@@ -1469,6 +1898,37 @@ function damageWorldObjects(x, y, radius) {
   }
 }
 
+function slashHitsTarget(origin, target, radius, facing, arc) {
+  const dx = target.x - origin.x;
+  const dy = target.y - origin.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance > radius + (target.radius || 0)) {
+    return false;
+  }
+
+  const angle = Math.atan2(dy, dx);
+  const allowance = arc * 0.5 + Math.min(0.22, (target.radius || 0) / Math.max(1, radius));
+  return Math.abs(angleDelta(angle, facing)) <= allowance;
+}
+
+function damageWorldObjectsInSlash(origin, radius, facing, arc) {
+  for (const object of worldObjects) {
+    if (!object.active) {
+      continue;
+    }
+
+    if (!slashHitsTarget(origin, object, radius, facing, arc)) {
+      continue;
+    }
+
+    if (object.kind === "barrel") {
+      explodeBarrel(object);
+    } else if (object.kind === "crate") {
+      openSupplyCrate(object);
+    }
+  }
+}
+
 function queueChoice(choice) {
   pendingChoices.push(choice);
   tryOpenNextChoice();
@@ -1498,6 +1958,13 @@ function dominantBuildPath() {
   }
 
   return bestValue > 0 ? bestPath : null;
+}
+
+function secondaryBuildPath() {
+  const ranked = Object.entries(player.buildAffinity)
+    .filter(([, value]) => value > 0)
+    .sort((left, right) => right[1] - left[1]);
+  return ranked[1]?.[0] || null;
 }
 
 function weightedPick(pool) {
@@ -1648,7 +2115,7 @@ function getOutgoingDamageMultiplier(enemy, source) {
     if (source === "shot") {
       multiplier *= 0.98;
     }
-    if (enemy.type === "boss" || enemy.type === "jammer") {
+    if (isBossEnemy(enemy) || enemy.type === "jammer") {
       multiplier *= 1.15;
     }
     if (source === "slash" && enemy.type === "elite") {
@@ -1656,14 +2123,57 @@ function getOutgoingDamageMultiplier(enemy, source) {
     }
   }
 
-  if (enemy.type === "boss") {
+  if (isBossEnemy(enemy)) {
     if (player.buildCore === "fang" && source === "slash") {
-      multiplier *= 0.92;
-    } else if (player.buildCore === "ghost" && source === "dash") {
-      multiplier *= 1.12;
+      multiplier *= 0.72;
     } else if (player.buildCore === "domain" && (source === "nova" || source === "aura")) {
       multiplier *= 1.12;
     }
+
+    if (source === "slash") {
+      multiplier *= 0.62;
+    } else if (source === "dash") {
+      multiplier *= 0.4;
+    } else if (source === "afterimage") {
+      multiplier *= 0.68;
+    }
+
+    const pylonCount = getBossPylons().length;
+    if (pylonCount > 0) {
+      multiplier *= pylonCount >= 4 ? 0.14 : pylonCount >= 2 ? 0.22 : 0.42;
+    }
+  }
+
+  if (enemy.type === "siege_boss") {
+    if (source === "slash") {
+      multiplier *= 0.56;
+    } else if (source === "dash") {
+      multiplier *= 0.34;
+    } else if (source === "afterimage") {
+      multiplier *= 0.62;
+    }
+  }
+
+  if (enemy.type === "pylon") {
+    if (player.buildCore === "fang" && source === "slash") {
+      multiplier *= 0.76;
+    }
+    const siblingCount = getBossPylons().length;
+    if (source === "slash") {
+      multiplier *= siblingCount >= 4 ? 0.22 : siblingCount >= 2 ? 0.3 : 0.42;
+    } else if (source === "dash") {
+      multiplier *= siblingCount >= 4 ? 0.12 : siblingCount >= 2 ? 0.18 : 0.24;
+    } else if (source === "afterimage") {
+      multiplier *= siblingCount >= 4 ? 0.32 : siblingCount >= 2 ? 0.44 : 0.58;
+    } else if (source === "shot") {
+      multiplier *= siblingCount >= 4 ? 0.68 : siblingCount >= 2 ? 0.8 : 0.9;
+    } else if (source === "nova" || source === "aura") {
+      multiplier *= siblingCount >= 4 ? 0.62 : siblingCount >= 2 ? 0.76 : 0.88;
+    }
+  }
+
+  if (source === "shot" && enemy.exposedTimer > 0) {
+    multiplier *= 1 + player.exposedShotBonus;
   }
 
   return multiplier;
@@ -1754,12 +2264,18 @@ function getBuildPalette() {
 
 function availableBuildUpgrades() {
   const dominant = dominantBuildPath();
+  const secondary = secondaryBuildPath();
   const totalAffinity = Object.values(player.buildAffinity).reduce((sum, value) => sum + value, 0);
   const combinedPool = [...UPGRADES, ...BUILD_UPGRADES];
 
   return combinedPool.filter((upgrade) => {
     const count = player.buildCounts[upgrade.id] || 0;
+    const maxRepeats = upgrade.maxRepeats ?? (upgrade.repeatable ? Infinity : 1);
     if (!upgrade.repeatable && count > 0) {
+      return false;
+    }
+
+    if (count >= maxRepeats) {
       return false;
     }
 
@@ -1769,6 +2285,10 @@ function availableBuildUpgrades() {
     }
 
     if (upgrade.minLevel && player.level < upgrade.minLevel) {
+      return false;
+    }
+
+    if (upgrade.id.includes("_ultimate") && dominant !== path) {
       return false;
     }
 
@@ -1787,7 +2307,12 @@ function availableBuildUpgrades() {
       const affinity = player.buildAffinity[path];
       weight *= 0.82 + affinity * 0.42;
       if (dominant === path) {
-        weight *= 1.35;
+        weight *= 1.45;
+      } else if (dominant && player.buildAffinity[dominant] >= 4) {
+        weight *= 0.44;
+      }
+      if (secondary && path !== dominant && path !== secondary) {
+        weight *= 0.26;
       }
       if (totalAffinity === 0) {
         weight *= 0.62;
@@ -1857,7 +2382,8 @@ function selectChoice(index) {
 }
 
 function createUpgradeChoice() {
-  const options = chooseWeightedDistinct(availableBuildUpgrades(), 3).map((upgrade) => ({
+  const pickedUpgrades = chooseWeightedDistinct(availableBuildUpgrades(), 3);
+  const options = pickedUpgrades.map((upgrade) => ({
     title: upgrade.title,
     description: upgrade.description,
     badge: upgrade.badge,
@@ -1867,6 +2393,83 @@ function createUpgradeChoice() {
       registerBuildUpgrade(upgrade);
     },
   }));
+
+  if (options.length < 3) {
+    const fallbackUpgrades = [
+      {
+        id: "fallback_breach_link",
+        title: "Breach Link",
+        description: "Slash-created weak spots linger longer, and shots into exposed targets hit much harder.",
+        badge: "Late Patch",
+        badgeColor: "#7ddcff",
+        apply() {
+          player.exposeDuration += 0.7;
+          player.exposedShotBonus += 0.1;
+        },
+      },
+      {
+        id: "fallback_burst_relay",
+        title: "Burst Relay",
+        description: "Powered shots cycle faster, and the burst round lands with a heavier punch.",
+        badge: "Late Patch",
+        badgeColor: "#7ddcff",
+        apply() {
+          player.shotBurstEvery = Math.max(3, player.shotBurstEvery - 1);
+          player.burstShotBonus += 0.18;
+          player.shootDamage += 1;
+        },
+      },
+      {
+        id: "fallback_phase_mesh",
+        title: "Phase Mesh",
+        description: "Dash and slash give a little more breathing room, and your dash loop tightens up.",
+        badge: "Late Patch",
+        badgeColor: "#7ddcff",
+        apply() {
+          player.slashGuardTime += 0.04;
+          player.phaseAfterDash += 0.12;
+          player.dashRechargeBase = Math.max(0.34, player.dashRechargeBase - 0.05);
+        },
+      },
+      {
+        id: "fallback_reactor_baffle",
+        title: "Reactor Baffle",
+        description: "The reactor cools faster, each nova costs a bit less heat, and you gain a little nova charge.",
+        badge: "Late Patch",
+        badgeColor: "#7ddcff",
+        apply() {
+          player.novaHeatDecay += 1.2;
+          player.novaHeatPerCast = Math.max(20, player.novaHeatPerCast - 4);
+          gainNova(14);
+        },
+      },
+      {
+        id: "fallback_hardlight_weave",
+        title: "Hardlight Weave",
+        description: "A compact combat weave: heal, gain max HP, and shave a little incoming damage.",
+        badge: "Late Patch",
+        badgeColor: "#7ddcff",
+        apply() {
+          player.maxHp += 6;
+          player.hp = clamp(player.hp + 18, 0, player.maxHp);
+          player.damageTakenScale *= 0.97;
+        },
+      },
+    ].filter((upgrade) => !options.some((option) => option.title === upgrade.title));
+
+    fallbackUpgrades.slice(0, 3 - options.length).forEach((upgrade) => {
+      options.push({
+        title: upgrade.title,
+        description: upgrade.description,
+        badge: upgrade.badge,
+        badgeColor: upgrade.badgeColor,
+        apply: () => {
+          upgrade.apply();
+          registerBuildUpgrade({ id: upgrade.id, title: upgrade.title, path: "neutral", tier: "uncommon" });
+        },
+      });
+    });
+  }
 
   return {
     tag: "LEVEL UP",
@@ -1879,8 +2482,13 @@ function createUpgradeChoice() {
 }
 
 function eligibleSkillNodes() {
+  const unlockedPaths = getUnlockedTreePaths();
   return SKILL_NODES.filter((node) => {
     if (player.treeNodes.includes(node.id)) {
+      return false;
+    }
+
+    if (unlockedPaths.length >= 2 && !unlockedPaths.includes(node.path)) {
       return false;
     }
 
@@ -1942,17 +2550,24 @@ function resetPlayer() {
   player.level = 1;
   player.xp = 0;
   player.xpToNext = 30;
-  player.nova = 40;
+  player.nova = 50;
   player.moveSpeed = CONFIG.baseMoveSpeed;
   player.shootCooldownBase = CONFIG.baseShootCooldown;
   player.shootCooldownTimer = 0;
   player.shootDamage = CONFIG.baseShootDamage;
   player.shootSpeed = CONFIG.baseShootSpeed;
   player.shootRange = CONFIG.baseShootRange;
+  player.shotChain = 0;
+  player.shotBurstEvery = 4;
+  player.burstShotBonus = 1.7;
   player.slashCooldownBase = CONFIG.baseSlashCooldown;
   player.slashCooldownTimer = 0;
   player.slashRange = CONFIG.baseSlashRange;
   player.slashDamage = CONFIG.baseSlashDamage;
+  player.slashArc = 1.3;
+  player.slashGuardTime = 0.18;
+  player.exposeDuration = 2.2;
+  player.exposedShotBonus = 0.28;
   player.slashTargets = 1;
   player.dashDuration = CONFIG.baseDashDuration;
   player.dashSpeed = CONFIG.baseDashSpeed;
@@ -1971,6 +2586,9 @@ function resetPlayer() {
   player.novaDamage = CONFIG.baseNovaDamage;
   player.novaCost = CONFIG.baseNovaCost;
   player.novaGainMult = 1;
+  player.novaHeat = 0;
+  player.novaHeatDecay = 11;
+  player.novaHeatPerCast = 48;
   player.xpGainMult = 1;
   player.bleedDamage = 0;
   player.bleedDuration = 0;
@@ -2000,6 +2618,7 @@ function resetPlayer() {
   player.bleedBurstRadius = 0;
   player.dashRefundOnKill = 0;
   player.auraNovaGain = 0;
+  player.auraHeatCooldown = 0;
   player.pickupBoltDamage = 0;
   player.pickupBoltCount = 0;
   player.jamResist = 0;
@@ -2046,6 +2665,13 @@ function resetGame() {
   state.extractionZone = null;
   state.extractionHold = 0;
   state.extractionGoal = 8;
+  state.nextWeatherTime = 42;
+  state.weather = null;
+  state.stageRewardIndex = 0;
+  state.nextOutpostTime = 56;
+  state.outpostZone = null;
+  state.nextTrainTime = 72;
+  state.trainEvent = null;
 
   resetPlayer();
   hideSplash();
@@ -2081,10 +2707,28 @@ function winGame() {
 }
 
 function damageEnemy(enemy, amount, source = "slash") {
-  const dealt = amount * getOutgoingDamageMultiplier(enemy, source);
+  let dealt = amount * getOutgoingDamageMultiplier(enemy, source);
+  if (isBossEnemy(enemy)) {
+    const pylonCount = getBossPylons().length;
+    const hitCap = Math.max(
+      enemy.type === "boss" ? (pylonCount > 0 ? 130 : 170) : 150,
+      enemy.maxHp * (enemy.type === "boss" ? (pylonCount >= 2 ? 0.05 : pylonCount === 1 ? 0.075 : 0.1) : 0.08)
+    );
+    dealt = Math.min(dealt, hitCap);
+  } else if (enemy.type === "pylon") {
+    const siblingCount = getBossPylons().length;
+    const hitCap = Math.max(
+      siblingCount >= 4 ? 54 : siblingCount >= 2 ? 72 : 90,
+      enemy.maxHp * (siblingCount >= 4 ? 0.07 : siblingCount >= 2 ? 0.1 : 0.14)
+    );
+    dealt = Math.min(dealt, hitCap);
+  }
   enemy.hp -= dealt;
+  if (enemy.type === "pylon") {
+    enemy.repairDelay = 2.8;
+  }
 
-  if (source === "slash" && player.executeThreshold > 0 && enemy.maxHp > 0 && enemy.hp / enemy.maxHp <= player.executeThreshold) {
+  if (!isBossEnemy(enemy) && source === "slash" && player.executeThreshold > 0 && enemy.maxHp > 0 && enemy.hp / enemy.maxHp <= player.executeThreshold) {
     enemy.hp = 0;
   }
 
@@ -2110,16 +2754,16 @@ function damageEnemy(enemy, amount, source = "slash") {
   player.combo += 1;
   player.comboTimer = 3.2 + player.comboExtension;
   player.overdriveCharge = clamp(player.overdriveCharge + enemy.xpValue * 1.2, 0, 100);
-  player.nova = clamp(player.nova + enemy.xpValue * 0.4 * player.novaGainMult, 0, 100);
-  addScreenShake(enemy.type === "boss" ? 18 : enemy.type === "elite" ? 10 : 6);
-  spawnParticles(enemy.x, enemy.y, enemy.type === "boss" ? "#a7ff83" : enemy.type === "elite" ? "#ff4d6d" : "#59e8ff", enemy.type === "boss" ? 22 : 12, 80, 260, 0.2, 0.52);
+  gainNova(enemy.xpValue * 0.26);
+  addScreenShake(isBossEnemy(enemy) ? 18 : enemy.type === "elite" ? 10 : 6);
+  spawnParticles(enemy.x, enemy.y, isBossEnemy(enemy) ? "#a7ff83" : enemy.type === "elite" ? "#ff4d6d" : "#59e8ff", isBossEnemy(enemy) ? 22 : 12, 80, 260, 0.2, 0.52);
   state.effects.push({
-    type: enemy.type === "boss" ? "nova" : "burst",
+    type: isBossEnemy(enemy) ? "nova" : "burst",
     x: enemy.x,
     y: enemy.y,
-    radius: enemy.radius * (enemy.type === "boss" ? 4.6 : 2.4),
-    life: enemy.type === "boss" ? 0.8 : 0.35,
-    color: enemy.type === "boss" ? "#a7ff83" : enemy.type === "elite" ? "#ff4d6d" : "#59e8ff",
+    radius: enemy.radius * (isBossEnemy(enemy) ? 4.6 : 2.4),
+    life: isBossEnemy(enemy) ? 0.8 : 0.35,
+    color: isBossEnemy(enemy) ? "#a7ff83" : enemy.type === "elite" ? "#ff4d6d" : "#59e8ff",
   });
 
   dropPickup(enemy.x, enemy.y, enemy.xpValue);
@@ -2156,21 +2800,42 @@ function damageEnemy(enemy, amount, source = "slash") {
   if (enemy === state.bountyTarget) {
     state.bountyTarget = null;
     player.overdriveCharge = clamp(player.overdriveCharge + 40, 0, 100);
-    player.nova = clamp(player.nova + 28, 0, 100);
+    coolNovaHeat(8);
+    gainNova(18);
     grantXp(32);
     setBurst("Bounty neutralized", 1.2);
     worldObjects.push({ kind: "crate", x: enemy.x, y: enemy.y, radius: 22, active: true, opened: false });
   }
 
-  if (enemy.type === "boss") {
-    state.nextBossTime = state.time + CONFIG.bossEvery;
+  if (isBossEnemy(enemy)) {
+    if (enemy.type === "boss") {
+      enemies = enemies.filter((item) => item.type !== "pylon");
+    }
+    if (!hasBossAlive()) {
+      state.nextBossTime = state.time + CONFIG.bossEvery;
+    }
+    if (!hasBossAlive()) {
     setBurst("机甲核心破裂，封锁出现缺口", 1.6);
     setStory("“很好。上城裂开了，但别停，第二道封锁已经在重编。”");
     const treeChoice = createSkillTreeChoice("Boss 核心被你撕开。选择一个 Zero 专属技能树节点作为战利品。");
     if (treeChoice) {
       queueChoice(treeChoice);
     }
-    grantXp(80);
+    }
+    if (!hasBossAlive()) {
+      grantXp(80);
+    } else {
+      setBurst(enemy.type === "siege_boss" ? "Siege carrier down" : "Core mech staggered", 1);
+    }
+  } else if (enemy.type === "pylon") {
+    const remainingCores = getBossPylons().length;
+    const boss = enemy.parentBoss;
+    if (boss && enemies.includes(boss)) {
+      boss.burstCooldown = Math.min(boss.burstCooldown, 0.75);
+      boss.volleyCooldown = Math.min(boss.volleyCooldown, 0.4);
+      boss.chargeCooldown = Math.min(boss.chargeCooldown, 1.2);
+    }
+    setBurst(remainingCores > 0 ? `${remainingCores} core${remainingCores === 1 ? "" : "s"} still stabilizing the mech` : "Boss core shell broken", 0.9);
   } else if (enemy.type === "jammer") {
     setBurst("Jammer offline", 1);
     worldObjects.push({ kind: "crate", x: enemy.x, y: enemy.y, radius: 20, active: true, opened: false });
@@ -2187,7 +2852,7 @@ function applyAreaDamage(x, y, radius, amount, source) {
 }
 
 function fireNova() {
-  if (state.mode !== "playing") {
+  if (isWorldFrozen()) {
     return;
   }
 
@@ -2196,7 +2861,13 @@ function fireNova() {
     return;
   }
 
+  if (player.novaHeat >= 68) {
+    setBurst("Nova core overheated", 0.9);
+    return;
+  }
+
   player.nova = 0;
+  player.novaHeat = clamp(player.novaHeat + player.novaHeatPerCast, 0, 100);
   player.invuln = Math.max(player.invuln, 0.55);
   const palette = getBuildPalette();
   addScreenShake(16);
@@ -2232,7 +2903,7 @@ function fireNova() {
 }
 
 function tryDash() {
-  if (state.mode !== "playing" || player.dashCharges <= 0 || player.dashTime > 0) {
+  if (isWorldFrozen() || player.dashCharges <= 0 || player.dashTime > 0) {
     return;
   }
 
@@ -2265,6 +2936,10 @@ function tryDash() {
 }
 
 function firePrimaryWeapon(camera) {
+  if (isWorldFrozen()) {
+    return;
+  }
+
   if (player.shootCooldownTimer > 0) {
     return;
   }
@@ -2279,18 +2954,23 @@ function firePrimaryWeapon(camera) {
   player.shootCooldownTimer = Math.max(0.055, player.shootCooldownBase * fireRateScale * overdriveScale);
 
   const shotSpeed = player.shootSpeed * (player.buildCore === "ghost" ? 1.08 : 1) * (player.overdrive > 0 ? 1.1 : 1);
-  const shotDamage = player.shootDamage + state.threatLevel * 1.05 + (player.overdrive > 0 ? 5 : 0);
+  player.shotChain += 1;
+  const burstShot = player.shotChain % player.shotBurstEvery === 0;
+  const shotDamage = (player.shootDamage + state.threatLevel * 1.15 + (player.overdrive > 0 ? 5 : 0)) * (burstShot ? player.burstShotBonus : 1);
+  const shotColor = burstShot ? palette.primary : palette.secondary;
+  const shotRadius = burstShot ? (player.buildCore === "domain" ? 9 : 8) : (player.buildCore === "domain" ? 7 : 6);
+  const remainingHits = (burstShot ? 2 : 1) + (player.ghostUltimate ? 1 : 0);
 
   state.playerProjectiles.push({
     x: player.x + direction.x * 24,
     y: player.y + direction.y * 24,
     vx: direction.x * shotSpeed,
     vy: direction.y * shotSpeed,
-    radius: player.buildCore === "domain" ? 7 : 6,
+    radius: shotRadius,
     damage: shotDamage,
-    color: palette.secondary,
+    color: shotColor,
     life: player.shootRange / shotSpeed,
-    remainingHits: player.ghostUltimate ? 2 : 1,
+    remainingHits,
     hitIds: new Set(),
   });
 
@@ -2301,47 +2981,73 @@ function firePrimaryWeapon(camera) {
     targetX: player.x + direction.x * 52,
     targetY: player.y + direction.y * 52,
     radius: 0,
-    life: 0.06,
-    color: palette.secondary,
+    life: burstShot ? 0.1 : 0.06,
+    color: shotColor,
     variant: player.buildCore,
   });
-  spawnParticles(player.x + direction.x * 18, player.y + direction.y * 18, palette.secondary, 4, 28, 120, 0.06, 0.12);
+  if (burstShot) {
+    addScreenShake(4);
+  }
+  spawnParticles(player.x + direction.x * 18, player.y + direction.y * 18, shotColor, burstShot ? 7 : 4, 28, 120, 0.06, 0.12);
 }
 
 function castAutoSlashSkill() {
+  if (isWorldFrozen()) {
+    return;
+  }
+
   if (player.slashCooldownTimer > 0) {
     return;
   }
 
+  const palette = getBuildPalette();
+  const camera = getCamera();
+  if (mouse.inside) {
+    const aimWorld = screenToWorld(mouse.x, mouse.y, camera);
+    player.facing = Math.atan2(aimWorld.y - player.y, aimWorld.x - player.x);
+  }
+
   const targets = enemies
-    .filter((enemy) => dist(player, enemy) <= player.slashRange)
+    .filter((enemy) => slashHitsTarget(player, enemy, player.slashRange, player.facing, player.slashArc))
     .sort((left, right) => dist(player, left) - dist(player, right))
     .slice(0, player.slashTargets);
 
+  player.slashCooldownTimer = Math.max(0.6, player.slashCooldownBase * (player.overdrive > 0 ? 0.82 : 1));
+  player.invuln = Math.max(player.invuln, player.slashGuardTime);
+  addScreenShake(targets.length > 0 ? 8 : 4);
+  spawnParticles(
+    player.x + Math.cos(player.facing) * 38,
+    player.y + Math.sin(player.facing) * 38,
+    palette.slash,
+    targets.length > 0 ? 10 : 5,
+    36,
+    150,
+    0.08,
+    0.18
+  );
+  state.effects.push({
+    type: "slash",
+    x: player.x,
+    y: player.y,
+    radius: player.slashRange,
+    life: 0.14,
+    color: palette.slash,
+    variant: player.buildCore,
+    angle: player.facing,
+    arc: player.slashArc,
+  });
+
   if (targets.length === 0) {
+    damageWorldObjectsInSlash(player, player.slashRange, player.facing, player.slashArc);
     return;
   }
 
-  player.slashCooldownTimer = Math.max(0.42, player.slashCooldownBase * 1.65 * (player.overdrive > 0 ? 0.78 : 1));
-  const primary = targets[0];
-  player.facing = Math.atan2(primary.y - player.y, primary.x - player.x);
-  const palette = getBuildPalette();
-
-  targets.forEach((enemy) => {
-    state.effects.push({
-      type: "slash",
-      x: player.x,
-      y: player.y,
-      targetX: enemy.x,
-      targetY: enemy.y,
-      radius: dist(player, enemy),
-      life: 0.18,
-      color: palette.slash,
-      variant: player.buildCore,
-    });
-    damageEnemy(enemy, player.slashDamage * 0.76 + state.threatLevel * 1.2 + (player.overdrive > 0 ? 10 : 0), "slash");
-    damageWorldObjects(enemy.x, enemy.y, 56);
-  });
+  player.invuln = Math.max(player.invuln, player.slashGuardTime + 0.08);
+  for (const enemy of targets) {
+    enemy.exposedTimer = Math.max(enemy.exposedTimer || 0, player.exposeDuration);
+    damageEnemy(enemy, player.slashDamage + state.threatLevel * 1.8 + (player.overdrive > 0 ? 14 : 0), "slash");
+  }
+  damageWorldObjectsInSlash(player, player.slashRange, player.facing, player.slashArc);
 }
 
 function hurtPlayer(amount, enemyType = "", damageType = "touch") {
@@ -2349,7 +3055,8 @@ function hurtPlayer(amount, enemyType = "", damageType = "touch") {
     return;
   }
 
-  const finalDamage = amount * player.damageTakenScale * getIncomingDamageMultiplier(enemyType, damageType);
+  const openingGuard = state.time < 42 ? 0.9 : player.level <= 3 ? 0.94 : 1;
+  const finalDamage = amount * player.damageTakenScale * openingGuard * getIncomingDamageMultiplier(enemyType, damageType);
   player.hp -= finalDamage;
   player.invuln = 0.52;
   state.hitFlash = 0.25;
@@ -2385,6 +3092,14 @@ function updateJammerEffects() {
 function updateStageEvents(dt) {
   if (state.bountyTarget && !enemies.includes(state.bountyTarget)) {
     state.bountyTarget = null;
+  }
+
+  if (!state.extractionActive && !state.lockdownZone && !state.outpostZone && !hasBossAlive() && state.time >= state.nextOutpostTime) {
+    startStreetOutpost();
+  }
+
+  if (!state.extractionActive && !hasBossAlive() && !state.trainEvent && state.time >= state.nextTrainTime) {
+    startTrainEvent();
   }
 
   if (!state.extractionUnlocked && state.time >= CONFIG.extractionTime) {
@@ -2458,14 +3173,136 @@ function updateStageEvents(dt) {
       winGame();
     }
   }
+
+  if (state.outpostZone) {
+    state.outpostZone.life -= dt;
+    state.outpostZone.pulse += dt * 3.2;
+    state.outpostZone.spawnTimer -= dt;
+    const insideOutpost = dist(player, state.outpostZone) <= state.outpostZone.radius;
+    state.outpostZone.hold = clamp(
+      state.outpostZone.hold + (insideOutpost ? dt : -dt * 0.55),
+      0,
+      state.outpostZone.goal
+    );
+
+    if (state.outpostZone.spawnTimer <= 0) {
+      state.outpostZone.spawnTimer = 4.6;
+      for (let index = 0; index < 2; index += 1) {
+        const angle = state.time + index * Math.PI;
+        const spawnX = state.outpostZone.x + Math.cos(angle) * (state.outpostZone.radius + 90);
+        const spawnY = state.outpostZone.y + Math.sin(angle) * (state.outpostZone.radius + 90);
+        enemies.push(createEnemy(index === 0 && state.time > 70 ? "elite" : "runner", spawnX, spawnY, 1 + state.threatLevel * 0.08));
+      }
+    }
+
+    if (insideOutpost && Math.random() < 0.12) {
+      state.effects.push({
+        type: "burst",
+        x: state.outpostZone.x + randomRange(-24, 24),
+        y: state.outpostZone.y + randomRange(-24, 24),
+        radius: randomRange(18, 28),
+        life: 0.14,
+        color: "#7ddcff",
+      });
+    }
+
+    if (state.outpostZone.hold >= state.outpostZone.goal) {
+      claimStreetOutpost();
+    } else if (state.outpostZone.life <= 0) {
+      setBurst("Street outpost collapsed", 0.9);
+      state.outpostZone = null;
+    }
+  }
+
+  if (state.trainEvent) {
+    if (!state.trainEvent.active) {
+      state.trainEvent.warning -= dt;
+      if (state.trainEvent.warning <= 0) {
+        state.trainEvent.active = true;
+        setBurst("Maglev crossing live", 0.9);
+      }
+    } else {
+      state.trainEvent.x += state.trainEvent.direction * state.trainEvent.speed * dt;
+      state.trainEvent.damageTick -= dt;
+
+      if (state.trainEvent.damageTick <= 0) {
+        state.trainEvent.damageTick = 0.09;
+        const halfLength = state.trainEvent.length * 0.5;
+        const halfWidth = state.trainEvent.width * 0.5;
+        const hitLeft = state.trainEvent.x - halfLength;
+        const hitRight = state.trainEvent.x + halfLength;
+        const hitTop = state.trainEvent.y - halfWidth;
+        const hitBottom = state.trainEvent.y + halfWidth;
+
+        if (player.x >= hitLeft && player.x <= hitRight && player.y >= hitTop && player.y <= hitBottom) {
+          hurtPlayer(22, "train", "impact");
+          player.invuln = Math.max(player.invuln, 0.4);
+        }
+
+        for (const enemy of [...enemies]) {
+          if (enemy.x >= hitLeft && enemy.x <= hitRight && enemy.y >= hitTop && enemy.y <= hitBottom) {
+      damageEnemy(enemy, isBossEnemy(enemy) ? 80 : 9999, "nova");
+          }
+        }
+      }
+
+      if (
+        (state.trainEvent.direction > 0 && state.trainEvent.x - state.trainEvent.length * 0.5 > world.width + 120)
+        || (state.trainEvent.direction < 0 && state.trainEvent.x + state.trainEvent.length * 0.5 < -120)
+      ) {
+        state.trainEvent = null;
+      }
+    }
+  }
 }
 
 function updateBoss(enemy, dt, direction, distanceToPlayer) {
   const profile = getBossAdaptiveProfile();
-  enemy.burstCooldown -= dt * profile.burstRate;
-  enemy.summonCooldown -= dt * profile.summonRate;
-  enemy.chargeCooldown -= dt * profile.chargeRate;
+  const bossCores = getBossPylons().filter((core) => core.parentBoss === enemy);
+  const activeCores = bossCores.length;
+  enemy.phase = activeCores >= 4 ? 1 : activeCores >= 2 ? 2 : 3;
+  const healthPressure = 1 - clamp(enemy.hp / enemy.maxHp, 0, 1);
+  const phasePressure = enemy.phase === 3 ? 1.22 : enemy.phase === 2 ? 1.1 : 1;
+  enemy.burstCooldown -= dt * profile.burstRate * (1 + healthPressure * 0.45) * phasePressure;
+  enemy.volleyCooldown -= dt * (1 + healthPressure * 0.5) * phasePressure;
+  enemy.summonCooldown -= dt * profile.summonRate * (1 + healthPressure * 0.18);
+  enemy.chargeCooldown -= dt * profile.chargeRate * (1 + healthPressure * 0.4);
   enemy.touchCooldown = Math.max(0, enemy.touchCooldown - dt);
+  enemy.linkCooldown -= dt;
+  enemy.linkDamageTick = Math.max(0, enemy.linkDamageTick - dt);
+
+  if (activeCores >= 2) {
+    if (enemy.linkWarmup > 0) {
+      enemy.linkWarmup -= dt;
+      if (enemy.linkWarmup <= 0) {
+        enemy.linkActive = 2.35;
+        enemy.linkDamageTick = 0;
+        setBurst("Core lattice live", 0.7);
+      }
+    } else if (enemy.linkActive > 0) {
+      enemy.linkActive -= dt;
+      if (bossCores.length >= 2 && enemy.linkDamageTick <= 0) {
+        const beamRadius = activeCores >= 4 ? 15 : 17;
+        for (const [startCore, endCore] of getBossCoreLinks(bossCores)) {
+          if (distanceToSegment(player, startCore, endCore) <= player.radius + beamRadius) {
+            enemy.linkDamageTick = 0.18;
+            hurtPlayer(11 + activeCores * 1.6 + state.bossStage, "boss", "beam");
+            addScreenShake(4);
+            break;
+          }
+        }
+      }
+    } else if (enemy.linkCooldown <= 0) {
+      enemy.linkCooldown = (activeCores >= 4 ? 5.2 : 6.3) - healthPressure * 1.4;
+      enemy.linkWarmup = activeCores >= 4 ? 0.72 : 0.85;
+      setBurst("Core lattice charging", 0.7);
+    }
+  } else {
+    enemy.linkWarmup = 0;
+    enemy.linkActive = 0;
+    enemy.linkDamageTick = 0;
+    enemy.linkCooldown = Math.max(enemy.linkCooldown, 2.4);
+  }
 
   if (enemy.chargeWindup > 0) {
     enemy.chargeWindup -= dt;
@@ -2479,14 +3316,45 @@ function updateBoss(enemy, dt, direction, distanceToPlayer) {
     enemy.chargeTime -= dt;
     enemy.x += enemy.chargeVector.x * 520 * profile.chargeSpeed * dt;
     enemy.y += enemy.chargeVector.y * 520 * profile.chargeSpeed * dt;
+    if (enemy.chargeTime <= 0) {
+      const shockwaveRadius = enemy.phase === 3 ? 160 : 136;
+      state.effects.push({
+        type: "burst",
+        x: enemy.x,
+        y: enemy.y,
+        radius: shockwaveRadius,
+        life: 0.22,
+        color: "#ff4d6d",
+      });
+      addScreenShake(10);
+      if (dist(player, enemy) <= shockwaveRadius + player.radius) {
+        hurtPlayer(16 + enemy.phase * 2, "boss", "shockwave");
+      }
+      const ringCount = 10 + enemy.phase * 2;
+      for (let i = 0; i < ringCount; i += 1) {
+        const angle = (Math.PI * 2 * i) / ringCount + state.time * 0.35;
+        state.enemyProjectiles.push({
+          x: enemy.x,
+          y: enemy.y,
+          vx: Math.cos(angle) * (255 + enemy.phase * 18),
+          vy: Math.sin(angle) * (255 + enemy.phase * 18),
+          radius: 8,
+          life: 3.2,
+          color: "#ff4d6d",
+          damage: 13 + enemy.phase,
+          enemyType: "boss",
+        });
+      }
+    }
   } else {
-    enemy.x += direction.x * enemy.speed * dt;
-    enemy.y += direction.y * enemy.speed * dt;
+    const chaseSpeed = enemy.speed * (1 + healthPressure * 0.12 + (enemy.phase === 3 ? 0.08 : 0));
+    enemy.x += direction.x * chaseSpeed * dt;
+    enemy.y += direction.y * chaseSpeed * dt;
   }
 
-  if (enemy.chargeCooldown <= 0 && distanceToPlayer > 180) {
-    enemy.chargeCooldown = 6;
-    enemy.chargeWindup = 0.45;
+  if (enemy.chargeCooldown <= 0 && distanceToPlayer > 150) {
+    enemy.chargeCooldown = enemy.phase === 3 ? 3.1 : enemy.phase === 2 ? 4.1 : 5;
+    enemy.chargeWindup = enemy.phase === 3 ? 0.26 : enemy.phase === 2 ? 0.34 : 0.42;
     enemy.chargeVector = direction;
     addScreenShake(8);
     state.effects.push({
@@ -2500,30 +3368,52 @@ function updateBoss(enemy, dt, direction, distanceToPlayer) {
   }
 
   if (enemy.burstCooldown <= 0) {
-    enemy.burstCooldown = 4.2;
-    const projectileCount = 18 + profile.extraProjectiles;
+    enemy.burstCooldown = enemy.phase === 3 ? 2 : enemy.phase === 2 ? 2.7 : 3.4;
+    const projectileCount = 18 + profile.extraProjectiles + (enemy.phase === 3 ? 6 : 0);
     for (let i = 0; i < projectileCount; i += 1) {
       const angle = (Math.PI * 2 * i) / projectileCount + state.time * 0.4;
       state.enemyProjectiles.push({
         x: enemy.x,
         y: enemy.y,
-        vx: Math.cos(angle) * 250,
-        vy: Math.sin(angle) * 250,
+        vx: Math.cos(angle) * (260 + enemy.phase * 12),
+        vy: Math.sin(angle) * (260 + enemy.phase * 12),
         radius: 8,
         life: 4,
         color: "#ff4d6d",
-        damage: 14,
+        damage: 15 + (enemy.phase === 3 ? 2 : 0),
+        enemyType: "boss",
+      });
+    }
+  }
+
+  if (enemy.volleyCooldown <= 0) {
+    enemy.volleyCooldown = enemy.phase === 3 ? 1.55 : enemy.phase === 2 ? 1.95 : 2.35;
+    const baseAngle = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+    const fanCount = enemy.phase === 3 ? 7 : enemy.phase === 2 ? 6 : 5;
+    for (let index = 0; index < fanCount; index += 1) {
+      const t = fanCount === 1 ? 0.5 : index / (fanCount - 1);
+      const angle = baseAngle + (t - 0.5) * 1.05;
+      state.enemyProjectiles.push({
+        x: enemy.x,
+        y: enemy.y,
+        vx: Math.cos(angle) * (320 + enemy.phase * 16),
+        vy: Math.sin(angle) * (320 + enemy.phase * 16),
+        radius: 9,
+        life: 2.9,
+        color: "#ff7a8f",
+        damage: 14 + enemy.phase,
         enemyType: "boss",
       });
     }
   }
 
   if (enemy.summonCooldown <= 0) {
-    enemy.summonCooldown = 8.5;
-    const summonCount = (player.buildCore === "domain" ? 5 : 4) + (state.lockdownZone ? 1 : 0);
+    enemy.summonCooldown = enemy.phase === 3 ? 5.2 : enemy.phase === 2 ? 6.4 : 7.6;
+    const summonCount = (player.buildCore === "domain" ? 5 : 4) + (state.lockdownZone ? 1 : 0) + (enemy.phase >= 2 ? 1 : 0);
     for (let i = 0; i < summonCount; i += 1) {
       const angle = (Math.PI * 2 * i) / summonCount + Math.random() * 0.4;
-      enemies.push(createEnemy("runner", enemy.x + Math.cos(angle) * 90, enemy.y + Math.sin(angle) * 90, 1 + state.threatLevel * 0.1));
+      const summonType = enemy.phase === 3 && i % 2 === 0 ? "charger" : "runner";
+      enemies.push(createEnemy(summonType, enemy.x + Math.cos(angle) * 90, enemy.y + Math.sin(angle) * 90, 1 + state.threatLevel * 0.1));
     }
   }
 
@@ -2533,8 +3423,101 @@ function updateBoss(enemy, dt, direction, distanceToPlayer) {
   }
 }
 
+function fireSiegeMissile(enemy, angle, speed, damage, blastRadius, color = "#ffb36b") {
+  state.enemyProjectiles.push({
+    kind: "siegeMissile",
+    x: enemy.x,
+    y: enemy.y,
+    vx: Math.cos(angle) * speed,
+    vy: Math.sin(angle) * speed,
+    radius: 15,
+    life: 4.4,
+    color,
+    damage,
+    blastRadius,
+    enemyType: "siege_boss",
+    speed,
+  });
+}
+
+function updateSiegeBoss(enemy, dt, direction, distanceToPlayer) {
+  const profile = getBossAdaptiveProfile();
+  enemy.missileCooldown -= dt * (1 + state.bossStage * 0.04);
+  enemy.missileSpreadCooldown -= dt * profile.burstRate;
+  enemy.broadsideCooldown -= dt;
+  enemy.touchCooldown = Math.max(0, enemy.touchCooldown - dt);
+  enemy.driftAngle += dt * 0.9;
+
+  if (distanceToPlayer < 360) {
+    moveEntityWithSolids(enemy, -direction.x * enemy.speed * 0.72 * dt, -direction.y * enemy.speed * 0.72 * dt, 0.9);
+  } else if (distanceToPlayer > 620) {
+    moveEntityWithSolids(enemy, direction.x * enemy.speed * 0.58 * dt, direction.y * enemy.speed * 0.58 * dt, 0.9);
+  } else {
+    const strafe = normalizeVector(Math.cos(enemy.driftAngle), Math.sin(enemy.driftAngle));
+    moveEntityWithSolids(enemy, strafe.x * enemy.speed * 0.46 * dt, strafe.y * enemy.speed * 0.46 * dt, 0.9);
+  }
+
+  if (enemy.broadsideWarmup > 0) {
+    enemy.broadsideWarmup -= dt;
+    if (enemy.broadsideWarmup <= 0) {
+      const salvoCount = 6;
+      for (let index = 0; index < salvoCount; index += 1) {
+        const angle = enemy.broadsideAngle + (index - (salvoCount - 1) / 2) * 0.13;
+        fireSiegeMissile(enemy, angle, 295, 20, 78, "#ffd166");
+      }
+      addScreenShake(10);
+    }
+  } else if (enemy.broadsideCooldown <= 0) {
+    enemy.broadsideCooldown = 6.4;
+    enemy.broadsideWarmup = 0.7;
+    enemy.broadsideAngle = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+    state.effects.push({
+      type: "warning",
+      x: enemy.x,
+      y: enemy.y,
+      radius: 120,
+      life: enemy.broadsideWarmup,
+      color: "#ffd166",
+    });
+  }
+
+  if (enemy.missileSpreadCooldown <= 0) {
+    enemy.missileSpreadCooldown = 3.2;
+    const baseAngle = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+    for (const offset of [-0.2, -0.08, 0.08, 0.2]) {
+      fireSiegeMissile(enemy, baseAngle + offset, 320, 17, 72, "#ffb36b");
+    }
+  }
+
+  if (enemy.missileCooldown <= 0) {
+    enemy.missileCooldown = 0.92;
+    const baseAngle = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+    fireSiegeMissile(enemy, baseAngle, 340, 18, 76, "#ff8a7d");
+  }
+
+  if (distanceToPlayer <= player.radius + enemy.radius + 8 && enemy.touchCooldown <= 0) {
+    enemy.touchCooldown = 0.85;
+    hurtPlayer(enemy.damage, "siege_boss", "touch");
+  }
+}
+
 function updateEnemy(enemy, dt) {
   enemy.touchCooldown = Math.max(0, enemy.touchCooldown - dt);
+  enemy.exposedTimer = Math.max(0, (enemy.exposedTimer || 0) - dt);
+  const ionStormActive = state.weather?.id === "ionStorm";
+
+  if (ionStormActive && isPointInPuddle(enemy.x, enemy.y, enemy.radius * 0.2)) {
+    enemy.ionTick = (enemy.ionTick || 0.4) - dt;
+    if (enemy.ionTick <= 0) {
+      enemy.ionTick = isBossEnemy(enemy) ? 0.55 : 0.38;
+      damageEnemy(enemy, isBossEnemy(enemy) ? 14 : 9, "aura");
+      if (!enemies.includes(enemy)) {
+        return;
+      }
+    }
+  } else {
+    enemy.ionTick = 0.4;
+  }
 
   if (enemy.bleedTimer > 0) {
     enemy.bleedTimer -= dt;
@@ -2552,6 +3535,11 @@ function updateEnemy(enemy, dt) {
   if (enemy.type === "boss") {
     updateBoss(enemy, dt, direction, distanceToPlayer);
     moveEntityWithSolids(enemy, 0, 0, 0.9);
+    return;
+  }
+
+  if (enemy.type === "siege_boss") {
+    updateSiegeBoss(enemy, dt, direction, distanceToPlayer);
     return;
   }
 
@@ -2585,6 +3573,144 @@ function updateEnemy(enemy, dt) {
         damage: 11,
         enemyType: "jammer",
       });
+    }
+    return;
+  }
+
+  if (enemy.type === "pylon") {
+    const boss = enemy.parentBoss;
+    if (!boss || !enemies.includes(boss)) {
+      enemy.hp = 0;
+      damageEnemy(enemy, 0, "slash");
+      return;
+    }
+
+    enemy.orbitAngle += enemy.orbitSpeed * dt;
+    enemy.x = boss.x + Math.cos(enemy.orbitAngle) * enemy.orbitRadius;
+    enemy.y = boss.y + Math.sin(enemy.orbitAngle) * enemy.orbitRadius;
+    enemy.fireCooldown -= dt;
+    enemy.pulseTimer -= dt;
+    enemy.suppressTick -= dt;
+    enemy.lanceCooldown -= dt;
+    enemy.bombardCooldown -= dt;
+    enemy.repairDelay = Math.max(0, enemy.repairDelay - dt);
+
+    const siblingCount = getBossPylons().length;
+    if (enemy.repairDelay <= 0) {
+      const repairRate = siblingCount > 1 ? enemy.maxHp * 0.03 : enemy.maxHp * 0.015;
+      enemy.hp = Math.min(enemy.maxHp, enemy.hp + repairRate * dt);
+    }
+
+    if (enemy.pulseTimer <= 0) {
+      enemy.pulseTimer = 0.9;
+      state.effects.push({
+        type: "warning",
+        x: enemy.x,
+        y: enemy.y,
+        radius: enemy.auraRadius,
+        life: 0.24,
+        color: "#a7ff83",
+      });
+    }
+
+    if (dist(player, enemy) <= enemy.auraRadius) {
+      if (enemy.suppressTick <= 0) {
+        enemy.suppressTick = 0.72;
+        hurtPlayer(6 + state.bossStage, "pylon", "field");
+      }
+    } else {
+      enemy.suppressTick = Math.min(enemy.suppressTick, 0.3);
+    }
+
+    if (enemy.lanceWarmup > 0) {
+      enemy.lanceWarmup -= dt;
+      if (enemy.lanceWarmup <= 0) {
+        state.enemyProjectiles.push({
+          kind: "laserBeam",
+          x: enemy.x,
+          y: enemy.y,
+          endX: enemy.lanceTargetX,
+          endY: enemy.lanceTargetY,
+          radius: 10,
+          life: 0.2,
+          color: "#d8fff1",
+          damage: siblingCount > 1 ? 19 : 15,
+          enemyType: "pylon",
+          applied: false,
+        });
+        addScreenShake(5);
+      }
+    } else if (enemy.lanceCooldown <= 0) {
+      enemy.lanceCooldown = siblingCount > 1 ? 3.6 : 2.8;
+      enemy.lanceWarmup = siblingCount > 1 ? 0.7 : 0.55;
+      enemy.lanceTargetX = player.x;
+      enemy.lanceTargetY = player.y;
+    }
+
+    if (enemy.bombardWarmup > 0) {
+      enemy.bombardWarmup -= dt;
+      if (enemy.bombardWarmup <= 0) {
+        state.effects.push({
+          type: "burst",
+          x: enemy.bombardTargetX,
+          y: enemy.bombardTargetY,
+          radius: enemy.bombardRadius,
+          life: 0.22,
+          color: "#ffb36b",
+        });
+        if (dist(player, { x: enemy.bombardTargetX, y: enemy.bombardTargetY }) <= enemy.bombardRadius + player.radius) {
+          hurtPlayer(17 + state.bossStage * 1.4, "pylon", "bombard");
+        }
+        addScreenShake(6);
+      }
+    } else if (siblingCount >= 3 && enemy.bombardCooldown <= 0) {
+      enemy.bombardCooldown = 4.2;
+      enemy.bombardWarmup = 0.9;
+      enemy.bombardTargetX = player.x;
+      enemy.bombardTargetY = player.y;
+      enemy.bombardRadius = siblingCount >= 4 ? 82 : 70;
+      state.effects.push({
+        type: "warning",
+        x: enemy.bombardTargetX,
+        y: enemy.bombardTargetY,
+        radius: enemy.bombardRadius,
+        life: enemy.bombardWarmup,
+        color: "#ffb36b",
+      });
+    }
+
+    if (siblingCount >= 4 && distanceToPlayer < 210 && enemy.pulseTimer <= 0.18) {
+      state.effects.push({
+        type: "burst",
+        x: enemy.x,
+        y: enemy.y,
+        radius: 54,
+        life: 0.16,
+        color: "#a7ff83",
+      });
+      if (dist(player, enemy) <= 54 + player.radius) {
+        hurtPlayer(10 + state.bossStage, "pylon", "pulse");
+      }
+      enemy.pulseTimer = 1.1;
+    }
+
+    if (enemy.fireCooldown <= 0) {
+      enemy.fireCooldown = siblingCount > 1 ? 0.88 : 0.76;
+      const baseAngle = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+      for (const offset of siblingCount > 1 ? [-0.56, -0.3, 0, 0.3, 0.56] : [-0.4, -0.18, 0.18, 0.4]) {
+        const angle = baseAngle + offset;
+        state.enemyProjectiles.push({
+          x: enemy.x,
+          y: enemy.y,
+          vx: Math.cos(angle) * 340,
+          vy: Math.sin(angle) * 340,
+          radius: 8,
+          life: 2.8,
+          color: "#a7ff83",
+          damage: siblingCount > 1 ? 15 : 13,
+          enemyType: "pylon",
+        });
+      }
     }
     return;
   }
@@ -2750,6 +3876,7 @@ function updateEnemy(enemy, dt) {
   }
 
   if (enemy.type === "charger") {
+    const roadBoost = isPointInRoad(enemy.x, enemy.y, 20) ? 1.22 : 1;
     if (enemy.chargeWindup > 0) {
       enemy.chargeWindup -= dt;
       if (enemy.chargeWindup <= 0) {
@@ -2757,7 +3884,7 @@ function updateEnemy(enemy, dt) {
       }
     } else if (enemy.chargeTime > 0) {
       enemy.chargeTime -= dt;
-      moveEntityWithSolids(enemy, enemy.chargeVector.x * 380 * dt, enemy.chargeVector.y * 380 * dt, 0.88);
+      moveEntityWithSolids(enemy, enemy.chargeVector.x * 380 * roadBoost * dt, enemy.chargeVector.y * 380 * roadBoost * dt, 0.88);
     } else {
       enemy.chargeCooldown -= dt;
       if (enemy.chargeCooldown <= 0 && distanceToPlayer > 110) {
@@ -2773,7 +3900,12 @@ function updateEnemy(enemy, dt) {
           color: "#ffd166",
         });
       } else {
-        moveEntityWithSolids(enemy, direction.x * enemy.speed * 0.88 * pressureBoost * dt, direction.y * enemy.speed * 0.88 * pressureBoost * dt, 0.88);
+        moveEntityWithSolids(
+          enemy,
+          direction.x * enemy.speed * 0.88 * pressureBoost * roadBoost * dt,
+          direction.y * enemy.speed * 0.88 * pressureBoost * roadBoost * dt,
+          0.88
+        );
       }
     }
 
@@ -2785,7 +3917,8 @@ function updateEnemy(enemy, dt) {
   }
 
   enemy.fireCooldown -= dt;
-  const speedMultiplier = (enemy.type === "elite" ? 0.86 + Math.sin(state.time * 5 + enemy.x) * 0.06 : 1) * pressureBoost;
+  const roadBoost = enemy.type === "runner" && isPointInRoad(enemy.x, enemy.y, 18) ? 1.18 : 1;
+  const speedMultiplier = (enemy.type === "elite" ? 0.86 + Math.sin(state.time * 5 + enemy.x) * 0.06 : 1) * pressureBoost * roadBoost;
 
   if (enemy.type === "shooter" && distanceToPlayer < 370) {
     moveEntityWithSolids(enemy, -direction.x * enemy.speed * 0.32 * dt, -direction.y * enemy.speed * 0.32 * dt, 0.88);
@@ -2954,24 +4087,26 @@ function updateProjectiles(dt) {
     shot.y += shot.vy * dt;
     shot.life -= dt;
 
-    for (const rect of CITY.solids) {
-      if (rectIntersectsCircle(rect, shot.x, shot.y, shot.radius)) {
-        shot.life = 0;
-        spawnParticles(shot.x, shot.y, shot.color, 7, 50, 170, 0.12, 0.26);
-        state.effects.push({
-          type: "burst",
-          x: shot.x,
-          y: shot.y,
-          radius: shot.kind === "missile" ? shot.blastRadius : 18,
-          life: 0.14,
-          color: shot.color,
-        });
-        if (shot.kind === "missile") {
-          if (dist(player, shot) <= shot.blastRadius + player.radius) {
-            hurtPlayer(shot.damage, shot.enemyType || "", "explosion");
+    if (shot.kind !== "siegeMissile") {
+      for (const rect of CITY.solids) {
+        if (rectIntersectsCircle(rect, shot.x, shot.y, shot.radius)) {
+          shot.life = 0;
+          spawnParticles(shot.x, shot.y, shot.color, 7, 50, 170, 0.12, 0.26);
+          state.effects.push({
+            type: "burst",
+            x: shot.x,
+            y: shot.y,
+            radius: shot.kind === "missile" || shot.kind === "siegeMissile" ? shot.blastRadius : 18,
+            life: 0.14,
+            color: shot.color,
+          });
+          if (shot.kind === "missile" || shot.kind === "siegeMissile") {
+            if (dist(player, shot) <= shot.blastRadius + player.radius) {
+              hurtPlayer(shot.damage, shot.enemyType || "", "explosion");
+            }
           }
+          break;
         }
-        break;
       }
     }
 
@@ -2980,17 +4115,17 @@ function updateProjectiles(dt) {
       hurtPlayer(
         shot.damage,
         shot.enemyType || "",
-        shot.kind === "missile" ? "explosion" : shot.enemyType === "boss" ? "projectile" : "projectile"
+        shot.kind === "missile" || shot.kind === "siegeMissile" ? "explosion" : shot.enemyType === "boss" ? "projectile" : "projectile"
       );
       state.effects.push({
         type: "burst",
         x: shot.x,
         y: shot.y,
-        radius: shot.kind === "missile" ? shot.blastRadius : 22,
+        radius: shot.kind === "missile" || shot.kind === "siegeMissile" ? shot.blastRadius : 22,
         life: 0.18,
         color: shot.color,
       });
-      if (shot.kind === "missile") {
+      if (shot.kind === "missile" || shot.kind === "siegeMissile") {
         addScreenShake(8);
       }
     }
@@ -3061,17 +4196,19 @@ function update(dt) {
     tryOpenNextChoice();
   }
 
-  if (state.mode !== "playing") {
+  if (isWorldFrozen()) {
     return;
   }
 
   state.time += dt;
-  state.threatLevel = 1 + Math.floor(state.time / 18);
+  state.threatLevel = 1 + Math.floor(state.time / 20) + (state.time >= 150 ? 1 : 0);
   state.spawnTimer -= dt;
   state.messageTimer = Math.max(0, state.messageTimer - dt);
   state.hitFlash = Math.max(0, state.hitFlash - dt);
   state.shake = Math.max(0, state.shake - dt * 24);
   updateJammerEffects();
+  updateWeather(dt);
+  updateStageRewards();
 
   player.dashTime = Math.max(0, player.dashTime - dt);
   player.shootCooldownTimer = Math.max(0, player.shootCooldownTimer - dt);
@@ -3080,6 +4217,11 @@ function update(dt) {
   player.auraTick = Math.max(0, player.auraTick - dt);
   player.comboTimer = Math.max(0, player.comboTimer - dt);
   player.overdrive = Math.max(0, player.overdrive - dt);
+  coolNovaHeat(
+    player.novaHeatDecay * dt
+    + (state.weather?.id === "ionStorm" ? 2.4 * dt : 0)
+    + (isPointInPuddle(player.x, player.y, 10) ? 7.5 * dt : 0)
+  );
 
   if (player.fangUltimate && player.overdrive > 0) {
     player.comboTimer = Math.max(player.comboTimer, 1);
@@ -3090,7 +4232,8 @@ function update(dt) {
   }
 
   if (player.dashCharges < player.dashChargesMax) {
-    const rechargeRate = player.overdrive > 0 ? 1.45 + (player.ghostUltimate ? 0.35 : 0) : 1;
+    const rechargeRate = (player.overdrive > 0 ? 1.45 + (player.ghostUltimate ? 0.35 : 0) : 1)
+      * (state.weather?.id === "ionStorm" && isPointInPuddle(player.x, player.y, 8) ? 1.28 : 1);
     player.dashRechargeTimer -= dt * rechargeRate;
     if (player.dashRechargeTimer <= 0) {
       player.dashCharges += 1;
@@ -3166,7 +4309,10 @@ function update(dt) {
     applyAreaDamage(player.x, player.y, player.auraRadius, player.auraDamage, "aura");
     const hits = Math.max(0, beforeCount - enemies.length);
     if (hits > 0 && player.auraNovaGain > 0) {
-      player.nova = clamp(player.nova + hits * player.auraNovaGain, 0, 100);
+      gainNova(hits * player.auraNovaGain);
+    }
+    if (hits > 0 && player.auraHeatCooldown > 0) {
+      coolNovaHeat(hits * player.auraHeatCooldown);
     }
   }
 
@@ -3185,10 +4331,11 @@ function update(dt) {
   }
 
   const eventPressure = (state.lockdownZone ? 0.14 : 0) + (state.extractionActive ? 0.16 : 0) + (state.bountyTarget ? 0.08 : 0);
-  const dynamicSpawnInterval = Math.max(0.22, CONFIG.spawnInterval - state.threatLevel * 0.055 - eventPressure);
+  const progression = clamp(state.time / 150, 0, 1);
+  const dynamicSpawnInterval = Math.max(0.28, CONFIG.spawnInterval - state.threatLevel * 0.043 - progression * 0.08 - eventPressure);
   if (state.spawnTimer <= 0 && !hasBossAlive()) {
     state.spawnTimer = dynamicSpawnInterval;
-    const wave = Math.min(2 + Math.floor(state.time / 16), 7) + (state.lockdownZone ? 1 : 0) + (state.extractionActive ? 1 : 0);
+    const wave = Math.min(2 + Math.floor(state.time / 22), 6) + (state.lockdownZone ? 1 : 0) + (state.extractionActive ? 1 : 0) + (state.time > 140 ? 1 : 0);
     for (let i = 0; i < wave; i += 1) {
       spawnEnemy();
     }
@@ -3207,6 +4354,167 @@ function update(dt) {
   updateStoryEvents();
   setObjectiveText();
   updateHud();
+}
+
+function tracePuddlePath(puddle, expand = 0) {
+  const baseWidth = puddle.w * 0.5 + expand;
+  const baseHeight = puddle.h * 0.5 + expand * 0.65;
+  ctx.beginPath();
+  ctx.ellipse(puddle.x - baseWidth * 0.16, puddle.y + 4, baseWidth * 0.84, baseHeight * 0.62, -0.12, 0, Math.PI * 2);
+  ctx.ellipse(puddle.x + baseWidth * 0.2, puddle.y - 3, baseWidth * 0.68, baseHeight * 0.54, 0.18, 0, Math.PI * 2);
+  ctx.ellipse(puddle.x - 2, puddle.y + baseHeight * 0.12, baseWidth * 0.97, baseHeight * 0.74, 0.05, 0, Math.PI * 2);
+}
+
+function drawRainLayer(camera, speed, density, alpha, length, width, blur = 0) {
+  ctx.save();
+  ctx.translate(-camera.x, -camera.y);
+  ctx.strokeStyle = `rgba(185, 222, 255, ${alpha})`;
+  ctx.lineWidth = width;
+  ctx.shadowBlur = blur;
+  ctx.shadowColor = "rgba(150, 210, 255, 0.18)";
+
+  for (let index = 0; index < density; index += 1) {
+    const seedX = (index * 67.31) % (world.width + 220);
+    const seedY = (index * 41.73) % (world.height + 240);
+    const drift = (state.time * speed + index * 13) % (world.height + 260);
+    const x = (seedX + state.time * speed * 0.2) % (world.width + 220) - 110;
+    const y = (seedY + drift) % (world.height + 260) - 130;
+    const slant = 10 + (index % 5) * 2;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x - slant, y + length + (index % 4) * 2);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function drawRainOverlay() {
+  if (state.weather?.id !== "ionStorm") {
+    return;
+  }
+
+  ctx.save();
+  ctx.fillStyle = "rgba(18, 24, 34, 0.07)";
+  ctx.fillRect(0, 0, view.width, view.height);
+  ctx.globalCompositeOperation = "screen";
+
+  for (let layer = 0; layer < 3; layer += 1) {
+    const speed = 520 + layer * 170;
+    const density = 80 + layer * 36;
+    const streakLength = 26 + layer * 10;
+    const streakWidth = 1.2 + layer * 0.35;
+    for (let index = 0; index < density; index += 1) {
+      const x = (index * (31 + layer * 7) + state.time * speed) % (view.width + 140) - 70;
+      const y = (index * (53 + layer * 11) + state.time * (speed * 1.4)) % (view.height + 180) - 90;
+      const tilt = 10 + layer * 3;
+      const rain = ctx.createLinearGradient(x, y, x - tilt, y + streakLength);
+      rain.addColorStop(0, "rgba(255,255,255,0)");
+      rain.addColorStop(0.2, `rgba(214,236,255,${0.08 + layer * 0.03})`);
+      rain.addColorStop(1, "rgba(170,210,255,0)");
+      ctx.strokeStyle = rain;
+      ctx.lineWidth = streakWidth;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - tilt, y + streakLength);
+      ctx.stroke();
+    }
+  }
+
+  ctx.globalCompositeOperation = "source-over";
+  for (let drip = 0; drip < 14; drip += 1) {
+    const x = (drip * 127 + state.time * 18) % (view.width + 60) - 30;
+    const y = ((drip * 43 + state.time * 110) % 120) - 80;
+    const droplet = ctx.createLinearGradient(x, y, x - 2, y + 60);
+    droplet.addColorStop(0, "rgba(255,255,255,0)");
+    droplet.addColorStop(0.32, "rgba(216,238,255,0.18)");
+    droplet.addColorStop(1, "rgba(216,238,255,0)");
+    ctx.strokeStyle = droplet;
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x - 4, y + 58);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function drawPuddleReflections(puddle) {
+  const baseWidth = puddle.w * 0.5;
+  const baseHeight = puddle.h * 0.5;
+  const storming = state.weather?.id === "ionStorm";
+  const puddleSprite = SPRITES.puddle;
+
+  if (puddleSprite.complete && puddleSprite.naturalWidth > 0) {
+    ctx.save();
+    tracePuddlePath(puddle, 1.5);
+    ctx.clip();
+    ctx.globalAlpha = storming ? 0.96 : 0.9;
+    ctx.translate(puddle.x, puddle.y);
+    ctx.rotate(Math.sin(puddle.x * 0.012 + puddle.y * 0.008) * 0.1);
+    const drawWidth = puddle.w * 1.22;
+    const drawHeight = puddle.h * 1.42;
+    ctx.drawImage(puddleSprite, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
+    ctx.restore();
+  }
+
+  ctx.save();
+  tracePuddlePath(puddle);
+  ctx.clip();
+
+  const surface = ctx.createLinearGradient(puddle.x, puddle.y - baseHeight, puddle.x, puddle.y + baseHeight);
+  surface.addColorStop(0, storming ? "rgba(126, 215, 255, 0.24)" : "rgba(132, 176, 214, 0.16)");
+  surface.addColorStop(0.45, storming ? `${puddle.hue}88` : `${puddle.hue}4f`);
+  surface.addColorStop(1, "rgba(6, 12, 20, 0.58)");
+  ctx.fillStyle = surface;
+  ctx.globalAlpha = puddleSprite.complete && puddleSprite.naturalWidth > 0 ? 0.36 : 1;
+  ctx.fillRect(puddle.x - baseWidth - 24, puddle.y - baseHeight - 20, puddle.w + 48, puddle.h + 40);
+
+  ctx.globalCompositeOperation = "screen";
+  for (let index = 0; index < 5; index += 1) {
+    const stripX = puddle.x - baseWidth * 0.7 + index * baseWidth * 0.36;
+    const shimmer = Math.sin(state.time * 2.6 + index * 1.3 + puddle.x * 0.01) * 6;
+    const reflection = ctx.createLinearGradient(stripX, puddle.y - baseHeight, stripX, puddle.y + baseHeight);
+    reflection.addColorStop(0, "rgba(255,255,255,0)");
+    reflection.addColorStop(0.3, storming ? "rgba(168, 236, 255, 0.22)" : "rgba(255,255,255,0.1)");
+    reflection.addColorStop(0.7, storming ? "rgba(90, 232, 255, 0.2)" : "rgba(130,170,220,0.12)");
+    reflection.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = reflection;
+    ctx.fillRect(stripX + shimmer, puddle.y - baseHeight - 4, 6 + index, puddle.h + 8);
+  }
+
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = "rgba(255,255,255,0.08)";
+  ctx.beginPath();
+  ctx.ellipse(puddle.x - baseWidth * 0.24, puddle.y - baseHeight * 0.08, baseWidth * 0.28, baseHeight * 0.12, -0.24, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(puddle.x + baseWidth * 0.15, puddle.y + baseHeight * 0.04, baseWidth * 0.18, baseHeight * 0.08, 0.14, 0, Math.PI * 2);
+  ctx.fill();
+
+  if (storming) {
+    for (let ripple = 0; ripple < 3; ripple += 1) {
+      const pulse = (state.time * 1.6 + ripple * 0.8 + puddle.x * 0.002) % 1;
+      const rippleX = puddle.x - baseWidth * 0.28 + ripple * baseWidth * 0.33;
+      const rippleY = puddle.y + ((ripple % 2 === 0 ? -1 : 1) * baseHeight * 0.08);
+      ctx.strokeStyle = `rgba(210, 244, 255, ${0.22 * (1 - pulse)})`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.ellipse(
+        rippleX,
+        rippleY,
+        8 + pulse * baseWidth * 0.22,
+        3 + pulse * baseHeight * 0.12,
+        -0.12,
+        0,
+        Math.PI * 2
+      );
+      ctx.stroke();
+    }
+  }
+
+  ctx.restore();
 }
 
 function drawBackground(camera) {
@@ -3289,14 +4597,34 @@ function drawBackground(camera) {
     }
   }
 
-  for (const puddle of CITY.puddles) {
-    const puddleGradient = ctx.createLinearGradient(puddle.x, puddle.y, puddle.x + puddle.w, puddle.y + puddle.h);
-    puddleGradient.addColorStop(0, "rgba(255,255,255,0.02)");
-    puddleGradient.addColorStop(1, `${puddle.hue}44`);
-    ctx.fillStyle = puddleGradient;
-    ctx.beginPath();
-    ctx.ellipse(puddle.x, puddle.y, puddle.w / 2, puddle.h / 2, 0, 0, Math.PI * 2);
-    ctx.fill();
+  if (state.weather?.id === "ionStorm") {
+    ctx.fillStyle = "rgba(120, 170, 210, 0.05)";
+    for (const road of CITY.roads.vertical) {
+      ctx.fillRect(road.x + 10, 0, road.w - 20, world.height);
+    }
+    for (const road of CITY.roads.horizontal) {
+      ctx.fillRect(0, road.y + 10, world.width, road.h - 20);
+    }
+    drawRainLayer(camera, 210, 90, 0.08, 20, 1.2);
+  }
+
+  if (arePuddlesActive()) {
+    for (const puddle of CITY.puddles) {
+      ctx.save();
+      ctx.shadowBlur = 18;
+      ctx.shadowColor = "rgba(0, 0, 0, 0.22)";
+      tracePuddlePath(puddle, 8);
+      ctx.fillStyle = "rgba(0, 0, 0, 0.14)";
+      ctx.fill();
+      ctx.restore();
+
+      drawPuddleReflections(puddle);
+
+      ctx.strokeStyle = "rgba(138, 232, 255, 0.42)";
+      ctx.lineWidth = 1.5;
+      tracePuddlePath(puddle, 1.5);
+      ctx.stroke();
+    }
   }
 
   if (state.lockdownZone) {
@@ -3330,6 +4658,41 @@ function drawBackground(camera) {
     ctx.beginPath();
     ctx.arc(state.extractionZone.x, state.extractionZone.y, state.extractionZone.radius * 0.62, 0, Math.PI * 2);
     ctx.stroke();
+    ctx.restore();
+  }
+
+  if (state.outpostZone) {
+    const pulse = 1 + Math.sin(state.outpostZone.pulse) * 0.08;
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+    ctx.strokeStyle = "rgba(125,220,255,0.88)";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.arc(state.outpostZone.x, state.outpostZone.y, state.outpostZone.radius * pulse, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(220,245,255,0.4)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(state.outpostZone.x, state.outpostZone.y, state.outpostZone.radius * 0.58, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  if (state.trainEvent && !state.trainEvent.active) {
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+    ctx.fillStyle = "rgba(150, 225, 255, 0.12)";
+    ctx.fillRect(0, state.trainEvent.y - state.trainEvent.width * 0.5, world.width, state.trainEvent.width);
+    ctx.strokeStyle = "rgba(220,245,255,0.46)";
+    ctx.lineWidth = 3;
+    ctx.setLineDash([20, 16]);
+    ctx.beginPath();
+    ctx.moveTo(0, state.trainEvent.y - state.trainEvent.width * 0.42);
+    ctx.lineTo(world.width, state.trainEvent.y - state.trainEvent.width * 0.42);
+    ctx.moveTo(0, state.trainEvent.y + state.trainEvent.width * 0.42);
+    ctx.lineTo(world.width, state.trainEvent.y + state.trainEvent.width * 0.42);
+    ctx.stroke();
+    ctx.setLineDash([]);
     ctx.restore();
   }
 
@@ -3423,7 +4786,24 @@ function drawEffects(camera) {
     ctx.save();
     ctx.globalAlpha = alpha;
 
-    if (effect.type === "slash" || effect.type === "bolt" || effect.type === "shotTrail") {
+    if (effect.type === "slash") {
+      ctx.translate(pos.x, pos.y);
+      ctx.rotate(effect.angle || 0);
+      ctx.strokeStyle = effect.color;
+      ctx.fillStyle = `${effect.color}2a`;
+      ctx.lineWidth = effect.variant === "fang" ? 10 : effect.variant === "ghost" ? 7 : 8;
+      ctx.shadowBlur = 20;
+      ctx.shadowColor = effect.color;
+      ctx.beginPath();
+      ctx.moveTo(18, -effect.radius * 0.22);
+      ctx.arc(0, 0, effect.radius, -(effect.arc || 1.2) * 0.5, (effect.arc || 1.2) * 0.5);
+      ctx.lineTo(18, effect.radius * 0.22);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(0, 0, effect.radius * 0.98, -(effect.arc || 1.2) * 0.5, (effect.arc || 1.2) * 0.5);
+      ctx.stroke();
+    } else if (effect.type === "bolt" || effect.type === "shotTrail") {
       const targetX = effect.targetX - camera.x;
       const targetY = effect.targetY - camera.y;
       ctx.strokeStyle = effect.color;
@@ -3436,11 +4816,6 @@ function drawEffects(camera) {
         ctx.moveTo(pos.x, pos.y);
         ctx.lineTo(targetX, targetY);
         ctx.stroke();
-        if (effect.type === "slash") {
-          ctx.beginPath();
-          ctx.arc(targetX, targetY, 10, 0, Math.PI * 2);
-          ctx.stroke();
-        }
       } else if (effect.variant === "ghost") {
         ctx.lineWidth = effect.type === "bolt" ? 3 : effect.type === "shotTrail" ? 2.5 : 5;
         ctx.setLineDash(effect.type === "bolt" ? [8, 6] : effect.type === "shotTrail" ? [10, 8] : [18, 10]);
@@ -3526,6 +4901,97 @@ function drawEffects(camera) {
 
     ctx.restore();
   }
+}
+
+function drawBossCoreLink(camera) {
+  const boss = getLivingBoss();
+  if (!boss || (boss.linkWarmup <= 0 && boss.linkActive <= 0)) {
+    return;
+  }
+
+  const bossCores = getBossPylons().filter((core) => core.parentBoss === boss);
+  if (bossCores.length < 2) {
+    return;
+  }
+  const links = getBossCoreLinks(bossCores);
+
+  ctx.save();
+  ctx.lineCap = "round";
+
+  if (boss.linkWarmup > 0) {
+    const pulse = 0.45 + Math.sin(state.time * 10) * 0.2;
+    ctx.strokeStyle = `rgba(255,166,94,${0.28 + pulse * 0.24})`;
+    ctx.lineWidth = bossCores.length >= 4 ? 7 : 8;
+    ctx.setLineDash([18, 10]);
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = "rgba(255,166,94,0.55)";
+    for (const [startCore, endCore] of links) {
+      const start = worldToScreen(startCore.x, startCore.y, camera);
+      const end = worldToScreen(endCore.x, endCore.y, camera);
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
+
+  if (boss.linkActive > 0) {
+    const pulse = 0.72 + Math.sin(state.time * 18) * 0.18;
+    ctx.strokeStyle = `rgba(255,82,124,${0.34 + pulse * 0.18})`;
+    ctx.lineWidth = bossCores.length >= 4 ? 18 : 22;
+    ctx.shadowBlur = 28;
+    ctx.shadowColor = "rgba(255,82,124,0.58)";
+    for (const [startCore, endCore] of links) {
+      const start = worldToScreen(startCore.x, startCore.y, camera);
+      const end = worldToScreen(endCore.x, endCore.y, camera);
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = "#ffe4ee";
+    ctx.lineWidth = bossCores.length >= 4 ? 4 : 5;
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = "rgba(255,228,238,0.9)";
+    for (const [startCore, endCore] of links) {
+      const start = worldToScreen(startCore.x, startCore.y, camera);
+      const end = worldToScreen(endCore.x, endCore.y, camera);
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+    }
+  }
+
+  ctx.restore();
+}
+
+function drawPylonWarnings(camera) {
+  const pylons = getBossPylons().filter((enemy) => enemy.lanceWarmup > 0);
+  if (pylons.length === 0) {
+    return;
+  }
+
+  ctx.save();
+  ctx.lineCap = "round";
+  for (const pylon of pylons) {
+    const start = worldToScreen(pylon.x, pylon.y, camera);
+    const end = worldToScreen(pylon.lanceTargetX, pylon.lanceTargetY, camera);
+    const pulse = 0.45 + Math.sin(state.time * 14 + pylon.x * 0.01) * 0.2;
+    ctx.strokeStyle = `rgba(167,255,131,${0.34 + pulse * 0.18})`;
+    ctx.lineWidth = 6;
+    ctx.setLineDash([10, 8]);
+    ctx.shadowBlur = 16;
+    ctx.shadowColor = "rgba(167,255,131,0.5)";
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
 }
 
 function drawPickups(camera) {
@@ -3623,6 +5089,52 @@ function drawForegroundDecor(camera) {
     ctx.fillRect(pole.x - 2, pole.y + 18, 12, 18);
     ctx.fillStyle = "rgba(255,255,255,0.06)";
     ctx.fillRect(pole.x - 12, pole.y + pole.h - 12, 32, 8);
+  }
+
+  if (state.trainEvent?.active) {
+    const noseX = state.trainEvent.x;
+    const halfLength = state.trainEvent.length * 0.5;
+    const halfWidth = state.trainEvent.width * 0.5;
+    ctx.save();
+    ctx.translate(noseX, state.trainEvent.y);
+    ctx.shadowBlur = 24;
+    ctx.shadowColor = "rgba(120,220,255,0.35)";
+    ctx.fillStyle = "#bfeeff";
+    ctx.beginPath();
+    ctx.roundRect(-halfLength, -halfWidth, state.trainEvent.length, state.trainEvent.width, 26);
+    ctx.fill();
+    ctx.fillStyle = "#233649";
+    ctx.beginPath();
+    ctx.roundRect(-halfLength + 22, -halfWidth + 12, state.trainEvent.length - 44, state.trainEvent.width - 24, 18);
+    ctx.fill();
+    ctx.fillStyle = "rgba(125,220,255,0.85)";
+    ctx.fillRect(-halfLength + 32, -halfWidth + 18, state.trainEvent.length - 64, 12);
+    ctx.fillRect(-halfLength + 32, halfWidth - 30, state.trainEvent.length - 64, 10);
+    ctx.restore();
+  }
+
+  if (state.weather?.id === "ionStorm") {
+    ctx.restore();
+    drawRainLayer(camera, 320, 120, 0.14, 30, 1.7, 1.5);
+
+    ctx.save();
+    ctx.translate(-camera.x, -camera.y);
+    if (arePuddlesActive()) {
+      for (const puddle of CITY.puddles) {
+        const baseWidth = puddle.w * 0.5;
+        const baseHeight = puddle.h * 0.5;
+        for (let index = 0; index < 4; index += 1) {
+          const pulse = (state.time * 2.8 + index * 0.47 + puddle.y * 0.003) % 1;
+          const dropX = puddle.x - baseWidth * 0.32 + index * baseWidth * 0.22;
+          const dropY = puddle.y + (index % 2 === 0 ? -baseHeight * 0.1 : baseHeight * 0.08);
+          ctx.strokeStyle = `rgba(220,245,255,${0.28 * (1 - pulse)})`;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.ellipse(dropX, dropY, 3 + pulse * 12, 1.5 + pulse * 4, -0.14, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+    }
   }
 
   ctx.restore();
@@ -3764,8 +5276,11 @@ function drawBipedFigure(size, colors, pose = "runner", options = {}) {
 }
 
 function getEnemyDisplayColor(type) {
-  if (type === "boss" || type === "turret") {
+  if (type === "boss" || type === "turret" || type === "pylon") {
     return "#a7ff83";
+  }
+  if (type === "siege_boss") {
+    return "#ffb36b";
   }
   if (type === "elite" || type === "jammer" || type === "laser" || type === "brood_turret") {
     return "#ff4d6d";
@@ -3794,6 +5309,9 @@ function getHeroSpriteSet() {
 
 function getEnemySprite(enemy) {
   if (enemy.type === "boss") {
+    return SPRITES.enemyBoss;
+  }
+  if (enemy.type === "siege_boss") {
     return SPRITES.enemyBoss;
   }
   if (enemy.type === "elite") {
@@ -3852,13 +5370,13 @@ function drawEnemies(camera) {
     const enemySprite = getEnemySprite(enemy);
     const aimAngle = Math.atan2(player.y - enemy.y, player.x - enemy.x);
     const faceRight = Math.cos(aimAngle) >= 0 ? 1 : -1;
-    const bob = enemy.type === "boss" ? Math.sin(state.time * 2.2 + enemy.x * 0.01) * 2.2 : Math.sin(state.time * 3.4 + enemy.x * 0.02) * 1.4;
+    const bob = isBossEnemy(enemy) ? Math.sin(state.time * 2.2 + enemy.x * 0.01) * 2.2 : Math.sin(state.time * 3.4 + enemy.x * 0.02) * 1.4;
 
     ctx.save();
     ctx.translate(pos.x, pos.y + bob);
 
     if (enemySprite) {
-      if (enemy.type === "boss") {
+      if (isBossEnemy(enemy)) {
         drawSpriteBillboard(enemySprite, enemy.radius * 2.68, enemy.radius * 2.68, {
           facing: faceRight,
           y: -enemy.radius * 1.78,
@@ -3920,6 +5438,23 @@ function drawEnemies(camera) {
       ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.arc(0, 0, enemy.radius + 12, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (enemy.type === "siege_boss") {
+      ctx.scale(faceRight, 1);
+      ctx.shadowBlur = 30;
+      ctx.shadowColor = "rgba(255,179,107,0.75)";
+      drawBipedFigure(enemy.radius * 0.86, {
+        body: "#584335",
+        limb: "#2c1f19",
+        head: "#f0dfd3",
+        visor: "#ffb36b",
+        accent: "#ffd166",
+        shadow: "rgba(255,179,107,0.24)",
+      }, "boss", { broad: true, weapon: "gun", cloak: true });
+      ctx.strokeStyle = "rgba(255,179,107,0.6)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, enemy.radius + 10, 0, Math.PI * 2);
       ctx.stroke();
     } else if (enemy.type === "elite") {
       ctx.scale(faceRight, 1);
@@ -4006,6 +5541,21 @@ function drawEnemies(camera) {
       ctx.fill();
       ctx.fillStyle = "#0d1526";
       ctx.fillRect(-6, -enemy.radius - 10, 12, 18);
+    } else if (enemy.type === "pylon") {
+      ctx.shadowBlur = 24;
+      ctx.shadowColor = "rgba(167,255,131,0.75)";
+      ctx.strokeStyle = "#a7ff83";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(0, 0, enemy.radius + 3, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = "#163028";
+      ctx.beginPath();
+      ctx.arc(0, 0, enemy.radius - 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#a7ff83";
+      ctx.fillRect(-5, -enemy.radius - 10, 10, enemy.radius + 8);
+      ctx.fillRect(-enemy.radius + 2, -5, enemy.radius * 2 - 4, 10);
     } else if (enemy.type === "jammer") {
       ctx.shadowBlur = 22;
       ctx.shadowColor = "rgba(255,77,109,0.75)";
@@ -4035,6 +5585,14 @@ function drawEnemies(camera) {
     }
 
     ctx.restore();
+
+    if (enemy.exposedTimer > 0) {
+      ctx.strokeStyle = "rgba(220,245,255,0.75)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, enemy.radius + 10, 0, Math.PI * 2);
+      ctx.stroke();
+    }
 
     ctx.fillStyle = "rgba(255,255,255,0.1)";
     ctx.fillRect(pos.x - enemy.radius, pos.y - enemy.radius - 16, enemy.radius * 2, 4);
@@ -4082,6 +5640,24 @@ function drawProjectiles(camera) {
       ctx.moveTo(pos.x, pos.y);
       ctx.lineTo(end.x, end.y);
       ctx.stroke();
+    } else if (shot.kind === "siegeMissile") {
+      ctx.translate(pos.x, pos.y);
+      ctx.rotate(Math.atan2(shot.vy, shot.vx));
+      ctx.shadowBlur = 24;
+      ctx.shadowColor = shot.color;
+      ctx.fillStyle = shot.color;
+      ctx.beginPath();
+      ctx.roundRect(-18, -8, 36, 16, 8);
+      ctx.fill();
+      ctx.fillStyle = "#fff1d6";
+      ctx.fillRect(8, -4, 10, 8);
+      ctx.fillStyle = "rgba(255,120,90,0.9)";
+      ctx.beginPath();
+      ctx.moveTo(-18, 0);
+      ctx.lineTo(-28, -6);
+      ctx.lineTo(-28, 6);
+      ctx.closePath();
+      ctx.fill();
     } else {
       ctx.translate(pos.x, pos.y);
       ctx.shadowBlur = 14;
@@ -4258,33 +5834,34 @@ function drawFloatingTexts(camera) {
 }
 
 function drawBossBar() {
-  const boss = enemies.find((enemy) => enemy.type === "boss");
-  if (!boss) {
+  const bosses = getActiveBosses();
+  if (bosses.length === 0) {
     return;
   }
-
-  const ratio = clamp(boss.hp / boss.maxHp, 0, 1);
   const width = 540;
   const x = (view.width - width) / 2;
-  const y = 26;
+  bosses.forEach((boss, index) => {
+    const ratio = clamp(boss.hp / boss.maxHp, 0, 1);
+    const y = 26 + index * 52;
 
-  ctx.save();
-  ctx.fillStyle = "rgba(7, 12, 25, 0.8)";
-  ctx.strokeStyle = "rgba(255,77,109,0.32)";
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.roundRect(x, y, width, 44, 18);
-  ctx.fill();
-  ctx.stroke();
+    ctx.save();
+    ctx.fillStyle = "rgba(7, 12, 25, 0.8)";
+    ctx.strokeStyle = boss.type === "siege_boss" ? "rgba(255,179,107,0.32)" : "rgba(255,77,109,0.32)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(x, y, width, 44, 18);
+    ctx.fill();
+    ctx.stroke();
 
-  ctx.fillStyle = "#eef4ff";
-  ctx.font = '700 16px "Bahnschrift", "Arial Narrow", sans-serif';
-  ctx.fillText(`执政机甲 Mk.${state.bossStage}`, x + 18, y + 11);
-  ctx.fillStyle = "rgba(255,255,255,0.12)";
-  ctx.fillRect(x + 18, y + 28, width - 36, 8);
-  ctx.fillStyle = "#ff4d6d";
-  ctx.fillRect(x + 18, y + 28, (width - 36) * ratio, 8);
-  ctx.restore();
+    ctx.fillStyle = "#eef4ff";
+    ctx.font = '700 16px "Bahnschrift", "Arial Narrow", sans-serif';
+    ctx.fillText(boss.type === "siege_boss" ? `围城载机 Mk.${state.bossStage}` : `执政机甲 Mk.${state.bossStage}`, x + 18, y + 11);
+    ctx.fillStyle = "rgba(255,255,255,0.12)";
+    ctx.fillRect(x + 18, y + 28, width - 36, 8);
+    ctx.fillStyle = boss.type === "siege_boss" ? "#ffb36b" : "#ff4d6d";
+    ctx.fillRect(x + 18, y + 28, (width - 36) * ratio, 8);
+    ctx.restore();
+  });
 }
 
 function drawHud(camera) {
@@ -4320,6 +5897,12 @@ function drawHud(camera) {
     ? "#a7ff83"
     : state.lockdownZone
       ? "#ff8a7d"
+      : state.outpostZone
+        ? "#7ddcff"
+        : state.trainEvent
+          ? "#9fe7ff"
+      : state.weather
+        ? "#59e8ff"
       : state.bountyTarget
         ? "#ff4d6d"
         : "#9bb3d9";
@@ -4327,9 +5910,17 @@ function drawHud(camera) {
     ? `EXTRACT ${state.extractionHold.toFixed(1)} / ${state.extractionGoal}s`
     : state.lockdownZone
       ? `LOCKDOWN ${Math.max(0, state.lockdownZone.life).toFixed(1)}s`
+      : state.outpostZone
+        ? `OUTPOST ${state.outpostZone.hold.toFixed(1)} / ${state.outpostZone.goal}s`
+        : state.trainEvent
+          ? state.trainEvent.active
+            ? "EVENT MAGLEV LIVE"
+            : `TRAIN ETA ${Math.max(0, state.trainEvent.warning).toFixed(1)}s`
+      : state.weather
+        ? `${WEATHER_TYPES[state.weather.id].hud} ${Math.max(0, state.weather.life).toFixed(0)}s`
       : state.bountyTarget
         ? "EVENT BOUNTY ELITE"
-        : `NEXT EVENT ${Math.max(0, Math.min(state.nextBountyTime, state.nextLockdownTime) - state.time).toFixed(0)}s`;
+        : `NEXT EVENT ${Math.max(0, Math.min(state.nextBountyTime, state.nextLockdownTime, state.nextOutpostTime, state.nextTrainTime) - state.time).toFixed(0)}s`;
   ctx.fillText(eventLine, 38, 118);
   ctx.fillText(`EXIT ${Math.max(0, CONFIG.extractionTime - state.time).toFixed(0)}s`, 196, 118);
   ctx.fillStyle = UPGRADE_TIER_DATA[player.highestTier].color;
@@ -4357,7 +5948,7 @@ function drawHud(camera) {
 
   for (const enemy of enemies) {
     ctx.fillStyle = getEnemyDisplayColor(enemy.type);
-    const size = enemy.type === "boss" ? 7 : 4;
+    const size = isBossEnemy(enemy) ? 7 : 4;
     ctx.fillRect(enemy.x * scaleX - size / 2, enemy.y * scaleY - size / 2, size, size);
   }
 
@@ -4434,11 +6025,14 @@ function draw() {
   drawPickups(camera);
   drawEnemies(camera);
   drawProjectiles(camera);
+  drawBossCoreLink(camera);
+  drawPylonWarnings(camera);
   drawPlayer(camera);
   drawParticles(camera);
   drawForegroundDecor(camera);
   drawFloatingTexts(camera);
   drawAimReticle(camera);
+  drawRainOverlay();
   drawHud(camera);
 }
 
@@ -4462,7 +6056,7 @@ function renderSkillTree() {
   if (player.treeNodes.length === 0) {
     const dormantNode = document.createElement("div");
     dormantNode.className = "tree-node";
-    dormantNode.innerHTML = "<strong>Awakening Tree</strong><span>Every 3 levels and each boss core will offer a Zero-only tree node.</span>";
+    dormantNode.innerHTML = "<strong>Awakening Tree</strong><span>Every 3 levels and each boss core will offer a Zero-only tree node. Zero can stabilize at most two awakened routes in one run.</span>";
     skillTreeList.appendChild(dormantNode);
     treeStatus.textContent = player.buildCore ? `${BUILD_LABELS[player.buildCore]} · ${player.titleText}` : player.titleText;
     return;
@@ -4484,7 +6078,7 @@ function updateHud() {
   hpText.textContent = `${Math.ceil(player.hp)} / ${player.maxHp}`;
 
   novaFill.style.width = `${player.nova}%`;
-  novaText.textContent = `${Math.round(player.nova)}%`;
+  novaText.textContent = `${Math.round(player.nova)}% / HEAT ${Math.round(player.novaHeat)}%`;
 
   const xpRatio = clamp(player.xp / player.xpToNext, 0, 1);
   xpFill.style.width = `${xpRatio * 100}%`;
@@ -4502,6 +6096,12 @@ function updateHud() {
     bossState.textContent = `EXIT ${Math.max(0, state.extractionGoal - state.extractionHold).toFixed(1)}s`;
   } else if (state.lockdownZone) {
     bossState.textContent = `LOCK ${Math.max(0, state.lockdownZone.life).toFixed(0)}s`;
+  } else if (state.outpostZone) {
+    bossState.textContent = `OUTPOST ${Math.max(0, state.outpostZone.goal - state.outpostZone.hold).toFixed(1)}s`;
+  } else if (state.trainEvent) {
+    bossState.textContent = state.trainEvent.active ? "TRAIN" : `${Math.max(0, state.trainEvent.warning).toFixed(1)}s`;
+  } else if (state.weather) {
+    bossState.textContent = `${Math.max(0, state.weather.life).toFixed(0)}s STORM`;
   } else if (state.bountyTarget && enemies.includes(state.bountyTarget)) {
     bossState.textContent = "BOUNTY";
   } else {
@@ -4522,12 +6122,17 @@ function loop(timestamp) {
   requestAnimationFrame(loop);
 }
 
+function clearInputState() {
+  keys.clear();
+  mouse.down = false;
+}
+
 startButton.addEventListener("click", () => {
   resetGame();
 });
 
 window.addEventListener("keydown", (event) => {
-  if (["Space", "KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "KeyR", "Digit1", "Digit2", "Digit3"].includes(event.code)) {
+  if (["Space", "KeyW", "KeyA", "KeyS", "KeyD", "KeyE", "KeyR", "Digit1", "Digit2", "Digit3"].includes(event.code)) {
     event.preventDefault();
   }
 
@@ -4548,10 +6153,6 @@ window.addEventListener("keydown", (event) => {
     tryDash();
   }
 
-  if (event.code === "KeyQ") {
-    castAutoSlashSkill();
-  }
-
   if (event.code === "KeyE") {
     fireNova();
   }
@@ -4563,6 +6164,16 @@ window.addEventListener("keydown", (event) => {
 
 window.addEventListener("keyup", (event) => {
   keys.delete(event.code);
+});
+
+window.addEventListener("blur", () => {
+  clearInputState();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    clearInputState();
+  }
 });
 
 canvas.addEventListener("mousemove", (event) => {
@@ -4580,12 +6191,18 @@ canvas.addEventListener("mouseleave", () => {
 
 canvas.addEventListener("mousedown", (event) => {
   updateMousePosition(event);
-  mouse.down = true;
+  if (event.button === 0) {
+    mouse.down = true;
+  } else if (event.button === 2) {
+    castAutoSlashSkill();
+  }
   event.preventDefault();
 });
 
-window.addEventListener("mouseup", () => {
-  mouse.down = false;
+window.addEventListener("mouseup", (event) => {
+  if (event.button === 0) {
+    mouse.down = false;
+  }
 });
 
 canvas.addEventListener("contextmenu", (event) => {
