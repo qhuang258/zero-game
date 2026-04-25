@@ -50,11 +50,11 @@ body::after {
 }
 
 .shell {
-  width: min(2800px, calc(100vw - 28px));
-  margin: 14px auto;
+  width: min(2000px, calc(100vw - 28px));
+  margin: 5px auto;
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 10px;
   align-items: stretch;
 }
 
@@ -71,7 +71,7 @@ body::after {
 }
 
 .hud-panel {
-  padding: 26px;
+  padding: 15px;
   overflow: hidden;
 }
 
@@ -255,15 +255,15 @@ body::after {
 }
 
 .game-panel {
-  padding: 18px;
-  min-height: min(88vh, 900px);
+  padding: 10px;
+  min-height: min(60vh, 600px);
   display: flex;
 }
 
 canvas {
   width: 100%;
   height: auto;
-  aspect-ratio: 21 / 9;
+  aspect-ratio: 16 / 9;
   display: block;
   border-radius: 22px;
   background: linear-gradient(180deg, rgba(5, 10, 22, 0.9), rgba(6, 10, 24, 0.96));
