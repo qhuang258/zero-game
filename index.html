@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zero: Escape Upper City</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="hud-panel">
+      <div class="title-wrap">
+        <p class="eyebrow">OC WORLD / CYBER REVENGE / WHITE WOLF</p>
+        <h1>Zero: Escape Upper City</h1>
+        <p class="subtitle">White wolf. Cyber body. Revenge route. Break the hunt net and get out of the upper city alive.</p>
+      </div>
+
+      <div class="info-grid">
+        <div class="card">
+          <span class="label">Move</span>
+          <strong>WASD</strong>
+        </div>
+        <div class="card">
+          <span class="label">Dash</span>
+          <strong>Space</strong>
+        </div>
+        <div class="card">
+          <span class="label">Nova</span>
+          <strong>E</strong>
+        </div>
+        <div class="card">
+          <span class="label">Choose</span>
+          <strong>1 / 2 / 3</strong>
+        </div>
+      </div>
+
+      <div class="status-stack">
+        <div class="meter">
+          <div class="meter-head">
+            <span>HP</span>
+            <span id="hpText">100 / 100</span>
+          </div>
+          <div class="bar hp-bar"><span id="hpFill"></span></div>
+        </div>
+        <div class="meter">
+          <div class="meter-head">
+            <span>Nova</span>
+            <span id="novaText">0%</span>
+          </div>
+          <div class="bar nova-bar"><span id="novaFill"></span></div>
+        </div>
+        <div class="meter">
+          <div class="meter-head">
+            <span>Level / XP</span>
+            <span id="xpText">Lv 1 - 0 / 30</span>
+          </div>
+          <div class="bar xp-bar"><span id="xpFill"></span></div>
+        </div>
+      </div>
+
+      <div class="compact-grid">
+        <div class="compact-card">
+          <span class="label">Dash</span>
+          <strong id="dashState">1 / 1</strong>
+        </div>
+        <div class="compact-card">
+          <span class="label">Threat</span>
+          <strong id="threatState">LV 1</strong>
+        </div>
+        <div class="compact-card">
+          <span class="label">Kills</span>
+          <strong id="killState">0</strong>
+        </div>
+        <div class="compact-card">
+          <span class="label">Boss</span>
+          <strong id="bossState">60s</strong>
+        </div>
+      </div>
+
+      <div class="log-card">
+        <span class="label">Objective</span>
+        <p id="objectiveText">Collect shards, build Zero, and survive until the first city mech drops in.</p>
+      </div>
+
+      <div class="log-card">
+        <span class="label">Signal</span>
+        <p id="storyText">"Escape is not the end. Make the whole upper city remember that Zero is still alive."</p>
+      </div>
+
+      <div class="tree-card">
+        <div class="tree-head">
+          <span class="label">Zero Skill Tree</span>
+          <strong id="treeStatus">Dormant</strong>
+        </div>
+        <div id="skillTreeList" class="tree-list"></div>
+      </div>
+    </section>
+
+    <section class="game-panel">
+      <canvas id="game" width="1280" height="720" aria-label="Zero game canvas"></canvas>
+
+      <div class="overlay" id="overlay">
+        <div class="overlay-card">
+          <p class="overlay-tag">ESCAPE THE UPPER CITY</p>
+          <h2 id="overlayTitle">Zero Enters The Hunt</h2>
+          <p id="overlayText">WASD to move, Space to dash, E to cast Nova. Kill enemies for shards, level up for random upgrades, and unlock Zero-only tree nodes on awakening milestones. The first city mech arrives at 60 seconds.</p>
+          <button id="startButton" type="button">Start Run</button>
+        </div>
+      </div>
+
+      <div class="choice-modal hidden" id="choiceModal">
+        <div class="choice-card">
+          <p class="overlay-tag" id="choiceTag">LEVEL UP</p>
+          <h3 id="choiceTitle">Choose Upgrade</h3>
+          <p id="choiceText">Zero's cyber body is recompiling.</p>
+          <div id="choiceOptions" class="choice-options"></div>
+          <p class="choice-hint">Click a button or press 1 / 2 / 3</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="game.js"></script>
+</body>
+</html>
