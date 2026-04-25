@@ -50,10 +50,10 @@ body::after {
 }
 
 .shell {
-  width: min(1500px, calc(100vw - 28px));
+  width: min(2800px, calc(100vw - 28px));
   margin: 14px auto;
   display: grid;
-  grid-template-columns: 360px minmax(0, 1fr);
+  grid-template-columns: 200px minmax(0, 1fr);
   gap: 18px;
   align-items: stretch;
 }
@@ -263,7 +263,7 @@ body::after {
 canvas {
   width: 100%;
   height: auto;
-  aspect-ratio: 16 / 10;
+  aspect-ratio: 21 / 9;
   display: block;
   border-radius: 22px;
   background: linear-gradient(180deg, rgba(5, 10, 22, 0.9), rgba(6, 10, 24, 0.96));
